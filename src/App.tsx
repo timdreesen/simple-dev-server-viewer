@@ -199,33 +199,27 @@ function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <div className="brand-mark"><span /></div>
-          <div>
-            <h1>Simple Dev Server Viewer</h1>
-            <p>Local runtime control</p>
-          </div>
-        </div>
-        <div className="top-actions">
-          <div className={`scan-state ${paused ? "paused" : ""}`}>
-            <span /> {paused ? "Scanning paused" : "Live scan · 2s"}
-          </div>
-          <button className="icon-button" onClick={() => setPaused(!paused)} aria-label={paused ? "Resume scanning" : "Pause scanning"}>
-            {paused ? <Play size={16} /> : <Pause size={16} />}
-          </button>
-          <button className="icon-button" onClick={refresh} aria-label="Refresh now">
-            <RefreshCw size={16} className={loading ? "spinning" : ""} />
-          </button>
-        </div>
-      </header>
-
       <section className="overview">
-        <div className="overview-copy">
-          <p className="eyebrow">SYSTEM OVERVIEW</p>
-          <h2>Everything listening.<br /><em>Nothing forgotten.</em></h2>
-          <p className="subcopy">A focused view of the development processes currently alive on this machine.</p>
-        </div>
+        <header className="overview-header">
+          <div className="brand">
+            <div className="brand-mark"><span /></div>
+            <div>
+              <h1>Simple Dev Server Viewer</h1>
+              <p>Local runtime control</p>
+            </div>
+          </div>
+          <div className="top-actions">
+            <div className={`scan-state ${paused ? "paused" : ""}`}>
+              <span /> {paused ? "Scanning paused" : "Live scan · 2s"}
+            </div>
+            <button className="icon-button" onClick={() => setPaused(!paused)} aria-label={paused ? "Resume scanning" : "Pause scanning"}>
+              {paused ? <Play size={16} /> : <Pause size={16} />}
+            </button>
+            <button className="icon-button" onClick={refresh} aria-label="Refresh now">
+              <RefreshCw size={16} className={loading ? "spinning" : ""} />
+            </button>
+          </div>
+        </header>
         <div className="metrics">
           <Metric label="Dev services" value={metrics.active.toString()} accent />
           <Metric label="Open ports" value={metrics.ports.toString()} />
