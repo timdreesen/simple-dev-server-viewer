@@ -1,6 +1,8 @@
 use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::{
     collections::HashMap,
     net::IpAddr,
@@ -11,6 +13,9 @@ use std::{
 };
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
 use tauri::State;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 struct AppState {
     system: Mutex<System>,
@@ -158,10 +163,12 @@ fn protocol_for(port: u16, category: &str) -> Option<&'static str> {
 }
 
 fn docker_services() -> (bool, HashMap<u16, DockerInfo>) {
-    let output = match Command::new("docker")
-        .args(["ps", "--format", "{{json .}}"])
-        .output()
-    {
+    let mut command = Command::new("docker");
+    command.args(["ps", "--format", "{{json .}}"]);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = match command.output() {
         Ok(output) if output.status.success() => output,
         _ => return (false, HashMap::new()),
     };
