@@ -57,7 +57,7 @@ jobs:
             These community builds are unsigned, so Windows SmartScreen and macOS Gatekeeper warnings may appear.
           releaseDraft: true
           prerelease: false
-          releaseAssetNamePattern: Simple-Dev-Server-Viewer-[version]-[platform]-[arch]-[bundle][ext]
+          assetNamePattern: Simple-Dev-Server-Viewer-[version]-[platform]-[arch]-[bundle][ext]
           args: ${{ matrix.args }}
       - name: Upload Windows portable executable
         if: runner.os == 'Windows'
