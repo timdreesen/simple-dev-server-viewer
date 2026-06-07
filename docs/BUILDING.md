@@ -86,15 +86,15 @@ Expected bundle locations:
 - macOS: `src-tauri/target/release/bundle/dmg/`
 - Linux: `src-tauri/target/release/bundle/appimage/` and `src-tauri/target/release/bundle/deb/`
 
-The executable itself is in `src-tauri/target/release/`.
+The standalone Windows executable is in `src-tauri/target/release/`. Tagged releases upload it separately with a filename ending in `windows-x64-PORTABLE.exe`.
 
 ## GitHub Actions Builds
 
 The validation workflow checks each pull request. The release workflow runs on tags matching `v*` and builds natively on Windows, macOS, and Ubuntu. Create a release build with:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 The resulting installers are unsigned. Signing and notarization require project-owned certificates and secrets and are intentionally outside the version 1 build.

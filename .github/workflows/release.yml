@@ -31,13 +31,42 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - run: npm ci
-      - uses: tauri-apps/tauri-action@v0
+      - id: tauri
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Simple Dev Server Viewer ${{ github.ref_name }}
-          releaseBody: Unsigned community builds. Windows SmartScreen and macOS Gatekeeper warnings may appear.
+          releaseBody: |
+            ## Downloads
+
+            ### Windows
+            - **Portable:** download the file ending in `windows-x64-PORTABLE.exe`. No installation required.
+            - **Installer:** download the file ending in `windows-x64-nsis.exe`.
+            - **MSI installer:** download the file ending in `windows-x64-msi.msi`.
+
+            ### macOS
+            - Download the file containing `darwin` and ending in `.dmg`.
+
+            ### Linux
+            - **Portable:** download the file containing `linux` and ending in `.AppImage`.
+            - Debian/Ubuntu users can download the file ending in `.deb`.
+            - Fedora/RHEL users can download the file ending in `.rpm`.
+
+            These community builds are unsigned, so Windows SmartScreen and macOS Gatekeeper warnings may appear.
           releaseDraft: true
           prerelease: false
+          releaseAssetNamePattern: Simple-Dev-Server-Viewer-[version]-[platform]-[arch]-[bundle][ext]
           args: ${{ matrix.args }}
+      - name: Upload Windows portable executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
+        run: |
+          npm run tauri build -- --no-bundle
+          $portable = "Simple-Dev-Server-Viewer-$env:APP_VERSION-windows-x64-PORTABLE.exe"
+          Copy-Item "src-tauri/target/release/simple-dev-server-viewer.exe" $portable
+          gh release upload "${{ github.ref_name }}" "$portable#Windows portable (no install)" --clobber

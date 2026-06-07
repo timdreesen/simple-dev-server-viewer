@@ -50,6 +50,8 @@ The Rust backend scans listening ports, matches them to running processes, and s
 
 Grab the latest Windows, macOS, or Linux build from [Releases](https://github.com/timdreesen/simple-dev-server-viewer/releases).
 
+On Windows, choose the file ending in `windows-x64-PORTABLE.exe` to run the app without installing it. The `.exe` ending in `nsis.exe` and the `.msi` file are installers.
+
 The builds are currently unsigned, so Windows SmartScreen or macOS Gatekeeper may show a warning.
 
 ## License
