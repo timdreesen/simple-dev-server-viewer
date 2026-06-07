@@ -205,7 +205,6 @@ function App() {
             <div className="brand-mark"><span /></div>
             <div>
               <h1>Simple Dev Server Viewer</h1>
-              <p>Local runtime control</p>
             </div>
           </div>
           <div className="top-actions">
@@ -221,7 +220,7 @@ function App() {
           </div>
         </header>
         <div className="metrics">
-          <Metric label="Dev services" value={metrics.active.toString()} accent />
+          <Metric label="Dev services" value={metrics.active.toString()} />
           <Metric label="Open ports" value={metrics.ports.toString()} />
           <Metric label="Memory used" value={formatBytes(metrics.memory)} />
           <Metric label="Containers" value={metrics.containers.toString()} detail={scan.dockerAvailable ? "Docker connected" : "Docker unavailable"} />
@@ -296,8 +295,8 @@ function App() {
   );
 }
 
-function Metric({ label, value, detail, accent = false }: { label: string; value: string; detail?: string; accent?: boolean }) {
-  return <article className={`metric ${accent ? "accent" : ""}`}><span>{label}</span><strong>{value}</strong><small>{detail || "Currently active"}</small></article>;
+function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return <article className="metric"><span>{label}</span><strong>{value}</strong><small>{detail || "Currently active"}</small></article>;
 }
 
 function SortButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {

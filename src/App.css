@@ -24,7 +24,6 @@ button { color: inherit; }
 .brand-mark { width: 26px; height: 26px; border: 1px solid #526153; display: grid; place-items: center; transform: rotate(45deg); }
 .brand-mark span { width: 7px; height: 7px; background: var(--green); }
 .brand h1 { font-size: 13px; margin: 0; letter-spacing: .02em; }
-.brand p { font: 10px "DM Mono"; color: var(--muted); margin: 3px 0 0; text-transform: uppercase; letter-spacing: .15em; }
 .top-actions { gap: 8px; }
 .scan-state { font: 10px "DM Mono"; text-transform: uppercase; letter-spacing: .08em; color: #aeb6af; margin-right: 8px; }
 .scan-state span { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 9px var(--green); margin-right: 6px; }
@@ -35,13 +34,11 @@ button { color: inherit; }
 .overview-header { border: 1px solid var(--line); background: var(--panel); padding: 18px; display: flex; flex-direction: column; justify-content: space-between; gap: 22px; }
 .overview-header .top-actions { justify-content: space-between; }
 .eyebrow { font: 10px "DM Mono"; color: var(--green); letter-spacing: .18em; margin: 0 0 12px; }
-.metrics { display: grid; grid-template-columns: repeat(4, 1fr); align-self: end; border: 1px solid var(--line); background: var(--panel); }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); align-self: stretch; border: 1px solid var(--line); background: var(--panel); }
 .metric { padding: 18px; border-right: 1px solid var(--line); min-width: 0; position: relative; }
 .metric:last-child { border: 0; }
-.metric.accent::before { content: ""; position: absolute; left: -1px; top: -1px; right: -1px; height: 2px; background: var(--green); }
 .metric span, .metric small { display: block; color: var(--muted); font: 9px "DM Mono"; text-transform: uppercase; letter-spacing: .07em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .metric strong { display: block; font: 500 24px "DM Mono"; margin: 13px 0 11px; letter-spacing: -.06em; }
-.metric.accent strong { color: var(--green); }
 .workspace { margin: 0 24px 24px; border: 1px solid var(--line); background: var(--panel); min-height: 390px; }
 .toolbar { min-height: 58px; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .search { height: 36px; flex: 1; max-width: 480px; border: 1px solid var(--line); background: #0d100e; display: flex; align-items: center; gap: 9px; padding: 0 10px; border-radius: 5px; color: var(--muted); }
