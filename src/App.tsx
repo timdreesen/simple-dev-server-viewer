@@ -18,6 +18,32 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
+import {
+  siAngular,
+  siAstro,
+  siBun,
+  siDeno,
+  siDocker,
+  siDotnet,
+  siElasticsearch,
+  siMariadb,
+  siMongodb,
+  siMysql,
+  siNextdotjs,
+  siNodedotjs,
+  siNuxt,
+  siPhp,
+  siPostgresql,
+  siPython,
+  siRedis,
+  siRemix,
+  siRubyonrails,
+  siSupabase,
+  siSvelte,
+  siVite,
+  siWebpack,
+  type SimpleIcon,
+} from "simple-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { formatBytes, formatUptime } from "./format";
@@ -69,6 +95,32 @@ const categoryIcon = (category: Category) => {
     unknown: Server,
   };
   return icons[category];
+};
+
+const frameworkIcons: Record<string, SimpleIcon> = {
+  ".NET": siDotnet,
+  Angular: siAngular,
+  Astro: siAstro,
+  Bun: siBun,
+  Deno: siDeno,
+  Docker: siDocker,
+  Elasticsearch: siElasticsearch,
+  MariaDB: siMariadb,
+  MongoDB: siMongodb,
+  MySQL: siMysql,
+  "Next.js": siNextdotjs,
+  "Node.js": siNodedotjs,
+  Nuxt: siNuxt,
+  PHP: siPhp,
+  PostgreSQL: siPostgresql,
+  Python: siPython,
+  Rails: siRubyonrails,
+  Redis: siRedis,
+  Remix: siRemix,
+  Supabase: siSupabase,
+  SvelteKit: siSvelte,
+  Vite: siVite,
+  webpack: siWebpack,
 };
 
 function App() {
@@ -291,11 +343,14 @@ function SortButton({ label, active, onClick }: { label: string; active: boolean
 
 function ServiceRow({ service, onAction, onStop, onFalsePositive, marked = false }: { service: Service; onAction: (command: string, args: Record<string, unknown>) => void; onStop: (service: Service) => void; onFalsePositive: (service: Service, marked: boolean) => void; marked?: boolean }) {
   const Icon = categoryIcon(service.category);
+  const frameworkIcon = service.docker ? siDocker : frameworkIcons[service.framework];
   const primaryPort = service.ports[0];
   return (
     <article className="service-row">
       <div className="service-main">
-        <div className={`service-icon ${service.category}`}><Icon size={18} /></div>
+        <div className={`service-icon ${service.category}`}>
+          {frameworkIcon ? <BrandIcon icon={frameworkIcon} /> : <Icon size={18} />}
+        </div>
         <div className="service-title">
           <div><strong>{service.displayName}</strong><span className={`badge ${service.category}`}>{service.framework}</span></div>
           <span className="command" title={service.command || service.name}>{service.workingDirectory || service.command || service.name}</span>
@@ -315,6 +370,14 @@ function ServiceRow({ service, onAction, onStop, onFalsePositive, marked = false
         <button className="stop" disabled={!service.canStop} onClick={() => onStop(service)} aria-label={`Stop ${service.displayName}`} title={service.docker ? "Container controls are disabled in version 1" : "Stop process tree"}><CircleStop size={15} /></button>
       </div>
     </article>
+  );
+}
+
+function BrandIcon({ icon }: { icon: SimpleIcon }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="brand-icon" style={{ color: `#${icon.hex}` }}>
+      <path fill="currentColor" d={icon.path} />
+    </svg>
   );
 }
 
