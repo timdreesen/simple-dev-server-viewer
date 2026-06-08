@@ -93,8 +93,8 @@ The standalone Windows executable is in `src-tauri/target/release/`. Tagged rele
 The validation workflow checks each pull request. The release workflow runs on tags matching `v*` and builds natively on Windows, macOS, and Ubuntu. Create a release build with:
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
 The resulting installers are unsigned. Signing and notarization require project-owned certificates and secrets and are intentionally outside the version 1 build.

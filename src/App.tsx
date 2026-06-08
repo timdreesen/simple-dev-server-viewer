@@ -4,12 +4,14 @@ import {
   ChevronDown,
   CircleStop,
   Database,
+  EyeOff,
   ExternalLink,
   FolderOpen,
   Globe2,
   Pause,
   Play,
   RefreshCw,
+  RotateCcw,
   Search,
   Server,
   SlidersHorizontal,
@@ -19,43 +21,14 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { formatBytes, formatUptime } from "./format";
-
-type Category = "web" | "database" | "container" | "runtime" | "unknown";
-type SortKey = "name" | "port" | "cpu" | "memory" | "uptime";
-
-interface PortInfo {
-  port: number;
-  address: string;
-  protocol?: string;
-  url?: string;
-}
-
-interface DockerInfo {
-  containerId: string;
-  name: string;
-  image: string;
-}
-
-interface Service {
-  id: string;
-  pid: number;
-  name: string;
-  displayName: string;
-  command: string;
-  workingDirectory?: string;
-  parentPid?: number;
-  category: Category;
-  framework: string;
-  confidence: number;
-  isLikelyDev: boolean;
-  cpuPercent: number;
-  memoryBytes: number;
-  uptimeSeconds: number;
-  ports: PortInfo[];
-  docker?: DockerInfo;
-  canStop: boolean;
-  canReveal: boolean;
-}
+import {
+  groupServices,
+  parseFalsePositiveKeys,
+  serializeFalsePositiveKeys,
+  type Category,
+  type Service,
+  type SortKey,
+} from "./services";
 
 interface ScanResult {
   services: Service[];
@@ -113,6 +86,10 @@ function App() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [confirming, setConfirming] = useState<Service | null>(null);
+  const [falsePositiveKeys, setFalsePositiveKeys] = useState(
+    () => parseFalsePositiveKeys(localStorage.getItem("falsePositiveKeys")),
+  );
+  const [falsePositivesExpanded, setFalsePositivesExpanded] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -136,48 +113,36 @@ function App() {
   useEffect(() => localStorage.setItem("category", category), [category]);
   useEffect(() => localStorage.setItem("showAll", String(showAll)), [showAll]);
   useEffect(() => localStorage.setItem("sortKey", sortKey), [sortKey]);
-
-  const filtered = useMemo(() => {
-    const search = query.trim().toLowerCase();
-    return scan.services
-      .filter((service) => showAll || service.isLikelyDev)
-      .filter((service) => category === "all" || service.category === category)
-      .filter(
-        (service) =>
-          !search ||
-          [
-            service.displayName,
-            service.framework,
-            service.command,
-            service.workingDirectory,
-            service.pid,
-            ...service.ports.map((port) => port.port),
-          ]
-            .join(" ")
-            .toLowerCase()
-            .includes(search),
-      )
-      .sort((a, b) => {
-        if (sortKey === "port") return a.ports[0].port - b.ports[0].port;
-        if (sortKey === "cpu") return b.cpuPercent - a.cpuPercent;
-        if (sortKey === "memory") return b.memoryBytes - a.memoryBytes;
-        if (sortKey === "uptime") return b.uptimeSeconds - a.uptimeSeconds;
-        return a.displayName.localeCompare(b.displayName);
-      });
-  }, [scan.services, showAll, category, query, sortKey]);
-
-  const metrics = useMemo(
-    () => ({
-      active: scan.services.filter((service) => service.isLikelyDev).length,
-      ports: scan.services.filter((service) => service.isLikelyDev).flatMap((service) => service.ports)
-        .length,
-      memory: scan.services
-        .filter((service) => service.isLikelyDev)
-        .reduce((sum, service) => sum + service.memoryBytes, 0),
-      containers: scan.services.filter((service) => service.docker).length,
-    }),
-    [scan.services],
+  useEffect(
+    () => localStorage.setItem("falsePositiveKeys", serializeFalsePositiveKeys(falsePositiveKeys)),
+    [falsePositiveKeys],
   );
+
+  const groups = useMemo(
+    () => groupServices(scan.services, falsePositiveKeys, showAll, category, query, sortKey),
+    [scan.services, falsePositiveKeys, showAll, category, query, sortKey],
+  );
+
+  const metrics = useMemo(() => {
+    const included = scan.services.filter((service) => !falsePositiveKeys.has(service.falsePositiveKey));
+    const likelyDev = included.filter((service) => service.isLikelyDev);
+    return {
+      active: likelyDev.length,
+      ports: likelyDev.flatMap((service) => service.ports).length,
+      memory: likelyDev.reduce((sum, service) => sum + service.memoryBytes, 0),
+      containers: included.filter((service) => service.docker).length,
+    };
+  }, [scan.services, falsePositiveKeys]);
+
+  const setFalsePositive = (service: Service, marked: boolean) => {
+    setFalsePositiveKeys((current) => {
+      const next = new Set(current);
+      if (marked) next.add(service.falsePositiveKey);
+      else next.delete(service.falsePositiveKey);
+      return next;
+    });
+    if (marked) setFalsePositivesExpanded(true);
+  };
 
   const runAction = async (command: string, args: Record<string, unknown>) => {
     try {
@@ -245,7 +210,7 @@ function App() {
             <input type="checkbox" checked={showAll} onChange={(event) => setShowAll(event.target.checked)} />
             <span /> Show all listeners
           </label>
-          <span className="result-count">{filtered.length} visible</span>
+          <span className="result-count">{groups.main.length} visible</span>
         </div>
 
         <div className="table-shell">
@@ -262,11 +227,32 @@ function App() {
             <EmptyState title="Scanner unavailable" detail={error} />
           ) : loading && !scan.scannedAt ? (
             <EmptyState title="Inspecting local ports" detail="Correlating listeners with active processes…" loading />
-          ) : filtered.length === 0 ? (
-            <EmptyState title="No matching services" detail={showAll ? "No listening processes match these filters." : "No likely development servers are currently active."} />
           ) : (
-            <div className="service-list">
-              {filtered.map((service) => <ServiceRow key={service.id} service={service} onAction={runAction} onStop={setConfirming} />)}
+            <div>
+              {groups.main.length === 0 ? (
+                <EmptyState title="No matching services" detail={showAll ? "No unmarked listening processes match these filters." : "No unmarked likely development servers are currently active."} compact={groups.falsePositives.length > 0} />
+              ) : (
+                <div className="service-list">
+                  {groups.main.map((service) => <ServiceRow key={service.id} service={service} onAction={runAction} onStop={setConfirming} onFalsePositive={setFalsePositive} />)}
+                </div>
+              )}
+              {groups.falsePositives.length > 0 && (
+                <section className="false-positive-section">
+                  <button
+                    className="false-positive-toggle"
+                    onClick={() => setFalsePositivesExpanded((expanded) => !expanded)}
+                    aria-expanded={falsePositivesExpanded}
+                  >
+                    <span><EyeOff size={14} /> False positives</span>
+                    <span>{groups.falsePositives.length} marked <ChevronDown size={14} /></span>
+                  </button>
+                  {falsePositivesExpanded && (
+                    <div className="service-list false-positive-list">
+                      {groups.falsePositives.map((service) => <ServiceRow key={service.id} service={service} onAction={runAction} onStop={setConfirming} onFalsePositive={setFalsePositive} marked />)}
+                    </div>
+                  )}
+                </section>
+              )}
             </div>
           )}
         </div>
@@ -303,7 +289,7 @@ function SortButton({ label, active, onClick }: { label: string; active: boolean
   return <button className={active ? "active" : ""} onClick={onClick}>{label}<ChevronDown size={12} /></button>;
 }
 
-function ServiceRow({ service, onAction, onStop }: { service: Service; onAction: (command: string, args: Record<string, unknown>) => void; onStop: (service: Service) => void }) {
+function ServiceRow({ service, onAction, onStop, onFalsePositive, marked = false }: { service: Service; onAction: (command: string, args: Record<string, unknown>) => void; onStop: (service: Service) => void; onFalsePositive: (service: Service, marked: boolean) => void; marked?: boolean }) {
   const Icon = categoryIcon(service.category);
   const primaryPort = service.ports[0];
   return (
@@ -325,14 +311,15 @@ function ServiceRow({ service, onAction, onStop }: { service: Service; onAction:
       <div className="row-actions">
         <button disabled={!primaryPort.url} onClick={() => onAction("open_service", { request: { url: primaryPort.url } })} aria-label={`Open ${service.displayName}`} title="Open in browser"><ExternalLink size={15} /></button>
         <button disabled={!service.canReveal} onClick={() => onAction("reveal_process_directory", { pid: service.pid })} aria-label={`Reveal ${service.displayName}`} title="Reveal directory"><FolderOpen size={15} /></button>
+        <button className="false-positive-action" onClick={() => onFalsePositive(service, !marked)} aria-label={`${marked ? "Restore" : "Mark"} ${service.displayName}`} title={marked ? "Restore to main results" : "Mark as false positive"}>{marked ? <RotateCcw size={15} /> : <EyeOff size={15} />}</button>
         <button className="stop" disabled={!service.canStop} onClick={() => onStop(service)} aria-label={`Stop ${service.displayName}`} title={service.docker ? "Container controls are disabled in version 1" : "Stop process tree"}><CircleStop size={15} /></button>
       </div>
     </article>
   );
 }
 
-function EmptyState({ title, detail, loading = false }: { title: string; detail: string; loading?: boolean }) {
-  return <div className="empty"><div className={loading ? "empty-pulse" : ""}><Server size={24} /></div><strong>{title}</strong><p>{detail}</p></div>;
+function EmptyState({ title, detail, loading = false, compact = false }: { title: string; detail: string; loading?: boolean; compact?: boolean }) {
+  return <div className={`empty ${compact ? "compact" : ""}`}><div className={loading ? "empty-pulse" : ""}><Server size={24} /></div><strong>{title}</strong><p>{detail}</p></div>;
 }
 
 export default App;

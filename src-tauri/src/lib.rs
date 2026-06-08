@@ -6,7 +6,7 @@ use std::os::windows::process::CommandExt;
 use std::{
     collections::HashMap,
     net::IpAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -59,6 +59,7 @@ struct Service {
     docker: Option<DockerInfo>,
     can_stop: bool,
     can_reveal: bool,
+    false_positive_key: String,
 }
 
 #[derive(Serialize)]
@@ -202,6 +203,25 @@ fn display_address(address: IpAddr) -> String {
     }
 }
 
+fn false_positive_key(
+    executable: Option<&Path>,
+    name: &str,
+    docker: Option<&DockerInfo>,
+) -> String {
+    if let Some(docker) = docker {
+        return format!("docker:{}", docker.name);
+    }
+
+    let identity = executable
+        .map(|path| path.to_string_lossy().into_owned())
+        .filter(|path| !path.is_empty())
+        .unwrap_or_else(|| name.to_string());
+    #[cfg(windows)]
+    let identity = identity.to_lowercase();
+
+    format!("process:{identity}")
+}
+
 #[tauri::command]
 fn scan_services(state: State<AppState>) -> Result<ScanResult, String> {
     let af_flags = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
@@ -278,6 +298,11 @@ fn scan_services(state: State<AppState>) -> Result<ScanResult, String> {
             .iter()
             .find_map(|port| docker_by_port.get(&port.port).cloned());
         let is_docker = docker.is_some();
+        let false_positive_key = false_positive_key(
+            process.and_then(|process| process.exe()),
+            &name,
+            docker.as_ref(),
+        );
         let display_name = docker
             .as_ref()
             .map(|value| value.name.clone())
@@ -317,6 +342,7 @@ fn scan_services(state: State<AppState>) -> Result<ScanResult, String> {
             docker,
             can_stop: process.is_some() && !is_docker,
             can_reveal: process.and_then(|p| p.cwd()).is_some(),
+            false_positive_key,
         });
     }
     services.sort_by(|a, b| {
@@ -476,6 +502,33 @@ mod tests {
     #[test]
     fn leaves_unusual_listeners_unclassified() {
         assert!(!classify("custom", "custom", &[port(123)]).3);
+    }
+
+    #[test]
+    fn builds_false_positive_key_from_executable() {
+        let key = false_positive_key(Some(Path::new("/opt/tools/discord")), "discord", None);
+        assert_eq!(key, "process:/opt/tools/discord");
+    }
+
+    #[test]
+    fn falls_back_to_process_name_for_false_positive_key() {
+        assert_eq!(
+            false_positive_key(None, "svchost.exe", None),
+            "process:svchost.exe"
+        );
+    }
+
+    #[test]
+    fn builds_false_positive_key_from_docker_name() {
+        let docker = DockerInfo {
+            container_id: "abc123".into(),
+            name: "local-postgres".into(),
+            image: "postgres:latest".into(),
+        };
+        assert_eq!(
+            false_positive_key(None, "docker", Some(&docker)),
+            "docker:local-postgres"
+        );
     }
 }
 
