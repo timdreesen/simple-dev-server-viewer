@@ -1,6 +1,6 @@
 [package]
 name = "simple-dev-server-viewer"
-version = "0.1.2"
+version = "0.1.3"
 description = "A lightweight task manager for local development servers"
 authors = ["Simple Dev Server Viewer contributors"]
 license = "MIT"
