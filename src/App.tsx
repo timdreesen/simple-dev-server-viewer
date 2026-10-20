@@ -1,388 +1,489 @@
 import { invoke } from "@tauri-apps/api/core";
-import {
-  Box,
-  ChevronDown,
-  CircleStop,
-  Database,
-  EyeOff,
-  ExternalLink,
-  FolderOpen,
-  Globe2,
-  Pause,
-  Play,
-  RefreshCw,
-  RotateCcw,
-  Search,
-  Server,
-  SlidersHorizontal,
-  TerminalSquare,
-  X,
-} from "lucide-react";
-import {
-  siAngular,
-  siAstro,
-  siBun,
-  siDeno,
-  siDocker,
-  siDotnet,
-  siElasticsearch,
-  siMariadb,
-  siMongodb,
-  siMysql,
-  siNextdotjs,
-  siNodedotjs,
-  siNuxt,
-  siPhp,
-  siPostgresql,
-  siPython,
-  siRedis,
-  siRemix,
-  siRubyonrails,
-  siSupabase,
-  siSvelte,
-  siVite,
-  siWebpack,
-  type SimpleIcon,
-} from "simple-icons";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Box, Database, Eye, EyeOff, FolderOpen, Globe, Search, Server, Square, TerminalSquare, Wrench, X } from "lucide-react";
+import type { SimpleIcon } from "simple-icons";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import "./App.css";
 import { formatBytes, formatUptime } from "./format";
+import { frameworkIcon } from "./icons";
 import {
-  groupServices,
-  parseFalsePositiveKeys,
-  serializeFalsePositiveKeys,
+  HIDDEN_STORAGE_KEY,
+  LEGACY_HIDDEN_STORAGE_KEY,
+  parseHiddenKeys,
+  portAddress,
+  sectionServices,
+  serializeHiddenKeys,
+  serviceDetail,
   type Category,
+  type PortInfo,
+  type ScanResult,
   type Service,
-  type SortKey,
 } from "./services";
-
-interface ScanResult {
-  services: Service[];
-  scannedAt: number;
-  listenerCount: number;
-  inaccessibleCount: number;
-  dockerAvailable: boolean;
-}
 
 interface ActionResult {
   success: boolean;
   message: string;
 }
 
-const categories: { id: Category | "all"; label: string }[] = [
-  { id: "all", label: "All types" },
-  { id: "web", label: "Web" },
-  { id: "database", label: "Databases" },
-  { id: "container", label: "Containers" },
-  { id: "runtime", label: "Runtimes" },
-  { id: "unknown", label: "Unknown" },
-];
+interface Actions {
+  open: (url: string) => void;
+  copy: (text: string) => void;
+  reveal: (service: Service) => void;
+  stop: (service: Service) => void;
+  toggleHidden: (service: Service) => void;
+}
 
-const emptyResult: ScanResult = {
-  services: [],
-  scannedAt: 0,
-  listenerCount: 0,
-  inaccessibleCount: 0,
-  dockerAvailable: false,
-};
+const SCAN_INTERVAL_MS = 2000;
+const MAX_VISIBLE_PORTS = 3;
 
-const categoryIcon = (category: Category) => {
-  const icons = {
-    web: Globe2,
-    database: Database,
-    container: Box,
-    runtime: TerminalSquare,
-    unknown: Server,
-  };
-  return icons[category];
-};
-
-const frameworkIcons: Record<string, SimpleIcon> = {
-  ".NET": siDotnet,
-  Angular: siAngular,
-  Astro: siAstro,
-  Bun: siBun,
-  Deno: siDeno,
-  Docker: siDocker,
-  Elasticsearch: siElasticsearch,
-  MariaDB: siMariadb,
-  MongoDB: siMongodb,
-  MySQL: siMysql,
-  "Next.js": siNextdotjs,
-  "Node.js": siNodedotjs,
-  Nuxt: siNuxt,
-  PHP: siPhp,
-  PostgreSQL: siPostgresql,
-  Python: siPython,
-  Rails: siRubyonrails,
-  Redis: siRedis,
-  Remix: siRemix,
-  Supabase: siSupabase,
-  SvelteKit: siSvelte,
-  Vite: siVite,
-  webpack: siWebpack,
+const categoryIcons: Record<Category, typeof Server> = {
+  web: Globe,
+  database: Database,
+  container: Box,
+  runtime: TerminalSquare,
+  tool: Wrench,
+  unknown: Server,
 };
 
 function App() {
-  const [scan, setScan] = useState<ScanResult>(emptyResult);
-  const [loading, setLoading] = useState(true);
-  const [paused, setPaused] = useState(false);
-  const [query, setQuery] = useState("");
-  const [category, setCategory] = useState<Category | "all">(
-    () => (localStorage.getItem("category") as Category | "all") || "all",
-  );
-  const [showAll, setShowAll] = useState(() => localStorage.getItem("showAll") === "true");
-  const [sortKey, setSortKey] = useState<SortKey>(
-    () => (localStorage.getItem("sortKey") as SortKey) || "name",
-  );
+  const [scan, setScan] = useState<ScanResult | null>(null);
   const [error, setError] = useState("");
-  const [toast, setToast] = useState("");
-  const [confirming, setConfirming] = useState<Service | null>(null);
-  const [falsePositiveKeys, setFalsePositiveKeys] = useState(
-    () => parseFalsePositiveKeys(localStorage.getItem("falsePositiveKeys")),
+  const [query, setQuery] = useState("");
+  const [hiddenKeys, setHiddenKeys] = useState(() =>
+    parseHiddenKeys(localStorage.getItem(HIDDEN_STORAGE_KEY) ?? localStorage.getItem(LEGACY_HIDDEN_STORAGE_KEY)),
   );
-  const [falsePositivesExpanded, setFalsePositivesExpanded] = useState(false);
+  const [showOthers, setShowOthers] = useState(() => localStorage.getItem("showOthers") === "true");
+  const [showHidden, setShowHidden] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const scanning = useRef(false);
+  const toastTimer = useRef<number>(undefined);
 
   const refresh = useCallback(async () => {
+    if (scanning.current) return;
+    scanning.current = true;
     try {
-      const result = await invoke<ScanResult>("scan_services");
-      setScan(result);
+      setScan(await invoke<ScanResult>("scan_services"));
       setError("");
     } catch (reason) {
       setError(String(reason));
     } finally {
-      setLoading(false);
+      scanning.current = false;
     }
   }, []);
 
+  // Scan continuously, but only while the window is visible.
   useEffect(() => {
     refresh();
-    if (paused) return;
-    const timer = window.setInterval(refresh, 2000);
-    return () => window.clearInterval(timer);
-  }, [paused, refresh]);
-
-  useEffect(() => localStorage.setItem("category", category), [category]);
-  useEffect(() => localStorage.setItem("showAll", String(showAll)), [showAll]);
-  useEffect(() => localStorage.setItem("sortKey", sortKey), [sortKey]);
-  useEffect(
-    () => localStorage.setItem("falsePositiveKeys", serializeFalsePositiveKeys(falsePositiveKeys)),
-    [falsePositiveKeys],
-  );
-
-  const groups = useMemo(
-    () => groupServices(scan.services, falsePositiveKeys, showAll, category, query, sortKey),
-    [scan.services, falsePositiveKeys, showAll, category, query, sortKey],
-  );
-
-  const metrics = useMemo(() => {
-    const included = scan.services.filter((service) => !falsePositiveKeys.has(service.falsePositiveKey));
-    const likelyDev = included.filter((service) => service.isLikelyDev);
-    return {
-      active: likelyDev.length,
-      ports: likelyDev.flatMap((service) => service.ports).length,
-      memory: likelyDev.reduce((sum, service) => sum + service.memoryBytes, 0),
-      containers: included.filter((service) => service.docker).length,
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, SCAN_INTERVAL_MS);
+    const onVisible = () => document.visibilityState === "visible" && refresh();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [scan.services, falsePositiveKeys]);
+  }, [refresh]);
 
-  const setFalsePositive = (service: Service, marked: boolean) => {
-    setFalsePositiveKeys((current) => {
-      const next = new Set(current);
-      if (marked) next.add(service.falsePositiveKey);
-      else next.delete(service.falsePositiveKey);
-      return next;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const typing = document.activeElement === searchRef.current;
+      if ((event.key === "f" && (event.ctrlKey || event.metaKey)) || (event.key === "/" && !typing)) {
+        event.preventDefault();
+        searchRef.current?.focus();
+      } else if (event.key === "Escape") {
+        if (query) setQuery("");
+        else searchRef.current?.blur();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [query]);
+
+  useEffect(() => {
+    localStorage.setItem(HIDDEN_STORAGE_KEY, serializeHiddenKeys(hiddenKeys));
+    localStorage.removeItem(LEGACY_HIDDEN_STORAGE_KEY);
+  }, [hiddenKeys]);
+  useEffect(() => localStorage.setItem("showOthers", String(showOthers)), [showOthers]);
+
+  // Forget "stopping" markers once the service is gone from the scan.
+  useEffect(() => {
+    if (!scan) return;
+    setStoppingIds((current) => {
+      const alive = new Set(scan.services.map((service) => service.id));
+      const next = new Set([...current].filter((id) => alive.has(id)));
+      return next.size === current.size ? current : next;
     });
-    if (marked) setFalsePositivesExpanded(true);
-  };
+  }, [scan]);
 
-  const runAction = async (command: string, args: Record<string, unknown>) => {
-    try {
-      const result = await invoke<ActionResult>(command, args);
-      setToast(result.message);
-      if (result.success) window.setTimeout(refresh, 500);
-    } catch (reason) {
-      setToast(String(reason));
-    }
-    window.setTimeout(() => setToast(""), 3500);
-  };
+  const sections = useMemo(
+    () => sectionServices(scan?.services ?? [], hiddenKeys, query),
+    [scan, hiddenKeys, query],
+  );
 
-  const stopService = async () => {
-    if (!confirming) return;
-    const service = confirming;
-    setConfirming(null);
-    await runAction("stop_process_tree", { pid: service.pid });
-  };
+  const notify = useCallback((message: string) => {
+    setToast(message);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(""), 3000);
+  }, []);
+
+  const actions: Actions = useMemo(() => {
+    const run = async (command: string, args: Record<string, unknown>, announce = false) => {
+      try {
+        const result = await invoke<ActionResult>(command, args);
+        if (!result.success || announce) notify(result.message);
+        return result.success;
+      } catch (reason) {
+        notify(String(reason));
+        return false;
+      }
+    };
+    return {
+      open: (url) => void run("open_service", { url }),
+      copy: (text) =>
+        navigator.clipboard.writeText(text).then(
+          () => notify(`Copied ${text}`),
+          () => notify("Could not copy to clipboard"),
+        ),
+      reveal: (service) => service.pid !== undefined && void run("reveal_process_directory", { pid: service.pid }),
+      stop: async (service) => {
+        setStoppingIds((current) => new Set(current).add(service.id));
+        const stopped = service.docker
+          ? await run("stop_container", { containerId: service.docker.containerId }, true)
+          : await run("stop_process_tree", { pid: service.pid }, true);
+        if (!stopped) {
+          setStoppingIds((current) => {
+            const next = new Set(current);
+            next.delete(service.id);
+            return next;
+          });
+        }
+        window.setTimeout(refresh, 600);
+      },
+      toggleHidden: (service) => {
+        setHiddenKeys((current) => {
+          const next = new Set(current);
+          if (next.has(service.hideKey)) next.delete(service.hideKey);
+          else {
+            next.add(service.hideKey);
+            notify(`Hid ${service.displayName}`);
+          }
+          return next;
+        });
+      },
+    };
+  }, [notify, refresh]);
+
+  const renderList = (services: Service[], hidden = false) => (
+    <ul className="service-list">
+      {services.map((service) => (
+        <ServiceRow
+          key={service.id}
+          service={service}
+          hidden={hidden}
+          stopping={stoppingIds.has(service.id)}
+          expanded={expandedId === service.id}
+          onToggle={() => setExpandedId((current) => (current === service.id ? null : service.id))}
+          actions={actions}
+        />
+      ))}
+    </ul>
+  );
 
   return (
-    <main className="app-shell">
-      <section className="overview">
-        <header className="overview-header">
-          <div className="brand">
-            <div className="brand-mark"><span /></div>
-            <div>
-              <h1>Simple Dev Server Viewer</h1>
-            </div>
-          </div>
-          <div className="top-actions">
-            <div className={`scan-state ${paused ? "paused" : ""}`}>
-              <span /> {paused ? "Scanning paused" : "Live scan · 2s"}
-            </div>
-            <button className="icon-button" onClick={() => setPaused(!paused)} aria-label={paused ? "Resume scanning" : "Pause scanning"}>
-              {paused ? <Play size={16} /> : <Pause size={16} />}
+    <div className="app">
+      <header className="topbar">
+        <h1>
+          Dev servers {scan && <span className="count">{sections.servers.length}</span>}
+        </h1>
+        <label className="search">
+          <Search size={14} aria-hidden />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Filter"
+            aria-label="Filter by name, port, or command"
+            spellCheck={false}
+          />
+          {query && (
+            <button onClick={() => setQuery("")} aria-label="Clear filter">
+              <X size={13} />
             </button>
-            <button className="icon-button" onClick={refresh} aria-label="Refresh now">
-              <RefreshCw size={16} className={loading ? "spinning" : ""} />
-            </button>
-          </div>
-        </header>
-        <div className="metrics">
-          <Metric label="Dev services" value={metrics.active.toString()} />
-          <Metric label="Open ports" value={metrics.ports.toString()} />
-          <Metric label="Memory used" value={formatBytes(metrics.memory)} />
-          <Metric label="Containers" value={metrics.containers.toString()} detail={scan.dockerAvailable ? "Docker connected" : "Docker unavailable"} />
-        </div>
-      </section>
-
-      <section className="workspace">
-        <div className="toolbar">
-          <label className="search">
-            <Search size={16} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search services, ports, commands…" />
-            {query && <button onClick={() => setQuery("")} aria-label="Clear search"><X size={14} /></button>}
-          </label>
-          <div className="select-wrap">
-            <SlidersHorizontal size={15} />
-            <select value={category} onChange={(event) => setCategory(event.target.value as Category | "all")}>
-              {categories.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-            <ChevronDown size={14} />
-          </div>
-          <label className="toggle">
-            <input type="checkbox" checked={showAll} onChange={(event) => setShowAll(event.target.checked)} />
-            <span /> Show all listeners
-          </label>
-          <span className="result-count">{groups.main.length} visible</span>
-        </div>
-
-        <div className="table-shell">
-          <div className="table-head">
-            <SortButton label="Service" active={sortKey === "name"} onClick={() => setSortKey("name")} />
-            <SortButton label="Endpoint" active={sortKey === "port"} onClick={() => setSortKey("port")} />
-            <SortButton label="CPU" active={sortKey === "cpu"} onClick={() => setSortKey("cpu")} />
-            <SortButton label="Memory" active={sortKey === "memory"} onClick={() => setSortKey("memory")} />
-            <SortButton label="Uptime" active={sortKey === "uptime"} onClick={() => setSortKey("uptime")} />
-            <span>Actions</span>
-          </div>
-
-          {error ? (
-            <EmptyState title="Scanner unavailable" detail={error} />
-          ) : loading && !scan.scannedAt ? (
-            <EmptyState title="Inspecting local ports" detail="Correlating listeners with active processes…" loading />
-          ) : (
-            <div>
-              {groups.main.length === 0 ? (
-                <EmptyState title="No matching services" detail={showAll ? "No unmarked listening processes match these filters." : "No unmarked likely development servers are currently active."} compact={groups.falsePositives.length > 0} />
-              ) : (
-                <div className="service-list">
-                  {groups.main.map((service) => <ServiceRow key={service.id} service={service} onAction={runAction} onStop={setConfirming} onFalsePositive={setFalsePositive} />)}
-                </div>
-              )}
-              {groups.falsePositives.length > 0 && (
-                <section className="false-positive-section">
-                  <button
-                    className="false-positive-toggle"
-                    onClick={() => setFalsePositivesExpanded((expanded) => !expanded)}
-                    aria-expanded={falsePositivesExpanded}
-                  >
-                    <span><EyeOff size={14} /> False positives</span>
-                    <span>{groups.falsePositives.length} marked <ChevronDown size={14} /></span>
-                  </button>
-                  {falsePositivesExpanded && (
-                    <div className="service-list false-positive-list">
-                      {groups.falsePositives.map((service) => <ServiceRow key={service.id} service={service} onAction={runAction} onStop={setConfirming} onFalsePositive={setFalsePositive} marked />)}
-                    </div>
-                  )}
-                </section>
-              )}
-            </div>
           )}
-        </div>
-        <footer>
-          <span>Last scan {scan.scannedAt ? new Date(scan.scannedAt * 1000).toLocaleTimeString() : "—"}</span>
-          <span>{scan.listenerCount} TCP listeners · {scan.inaccessibleCount} restricted</span>
-        </footer>
-      </section>
+        </label>
+      </header>
 
-      {confirming && (
-        <div className="modal-backdrop" onMouseDown={() => setConfirming(null)}>
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="stop-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="danger-icon"><CircleStop size={22} /></div>
-            <p className="eyebrow">STOP PROCESS TREE</p>
-            <h3 id="stop-title">Stop {confirming.displayName}?</h3>
-            <p>This sends a graceful termination signal to PID {confirming.pid} and its child processes. Unsaved work may be lost.</p>
-            <div className="modal-actions">
-              <button className="secondary" onClick={() => setConfirming(null)}>Cancel</button>
-              <button className="danger" onClick={stopService}>Stop service</button>
-            </div>
-          </div>
+      <main className="content">
+        {error && !scan ? (
+          <EmptyState title="Can't read open ports" detail={error} />
+        ) : !scan ? (
+          <EmptyState title="Looking for servers…" />
+        ) : (
+          <>
+            {sections.servers.length > 0 ? (
+              renderList(sections.servers)
+            ) : query ? (
+              <EmptyState title="No matches" detail={`Nothing running matches “${query}”.`} />
+            ) : (
+              <EmptyState
+                title="No dev servers running"
+                detail={
+                  <>
+                    Start one, for example <code>npm run dev</code>, and it shows up here automatically.
+                  </>
+                }
+              />
+            )}
+            {showOthers && sections.others.length > 0 && (
+              <Section title="Other processes listening on ports">{renderList(sections.others)}</Section>
+            )}
+            {showHidden && sections.hidden.length > 0 && (
+              <Section title="Hidden">{renderList(sections.hidden, true)}</Section>
+            )}
+          </>
+        )}
+      </main>
+
+      <footer className="statusbar">
+        <span className={`live ${error ? "offline" : ""}`} title={error || "Scanning every 2 seconds"}>
+          <i aria-hidden /> {error ? "Scan failed" : "Live"}
+        </span>
+        <label className="checkbox">
+          <input type="checkbox" checked={showOthers} onChange={(event) => setShowOthers(event.target.checked)} />
+          Show other processes{scan ? ` (${sections.others.length})` : ""}
+        </label>
+        {sections.hidden.length > 0 && (
+          <label className="checkbox">
+            <input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} />
+            Show hidden ({sections.hidden.length})
+          </label>
+        )}
+        {scan && !scan.dockerAvailable && (
+          <span className="muted push" title="Docker is not installed or not running">
+            Docker not detected
+          </span>
+        )}
+      </footer>
+
+      {toast && (
+        <div className="toast" role="status">
+          {toast}
         </div>
       )}
-      {toast && <div className="toast">{toast}</div>}
-    </main>
+    </div>
   );
 }
 
-function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
-  return <article className="metric"><span>{label}</span><strong>{value}</strong><small>{detail || "Currently active"}</small></article>;
-}
-
-function SortButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return <button className={active ? "active" : ""} onClick={onClick}>{label}<ChevronDown size={12} /></button>;
-}
-
-function ServiceRow({ service, onAction, onStop, onFalsePositive, marked = false }: { service: Service; onAction: (command: string, args: Record<string, unknown>) => void; onStop: (service: Service) => void; onFalsePositive: (service: Service, marked: boolean) => void; marked?: boolean }) {
-  const Icon = categoryIcon(service.category);
-  const frameworkIcon = service.docker ? siDocker : frameworkIcons[service.framework];
-  const primaryPort = service.ports[0];
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <article className="service-row">
-      <div className="service-main">
-        <div className={`service-icon ${service.category}`}>
-          {frameworkIcon ? <BrandIcon icon={frameworkIcon} /> : <Icon size={18} />}
-        </div>
-        <div className="service-title">
-          <div><strong>{service.displayName}</strong><span className={`badge ${service.category}`}>{service.framework}</span></div>
-          <span className="command" title={service.command || service.name}>{service.workingDirectory || service.command || service.name}</span>
-        </div>
-      </div>
-      <div className="endpoint">
-        <strong>{primaryPort.url ? `:${primaryPort.port}` : `TCP ${primaryPort.port}`}</strong>
-        <span>{service.ports.length > 1 ? `+${service.ports.length - 1} ports` : primaryPort.address}</span>
-      </div>
-      <div className="resource"><strong>{service.cpuPercent.toFixed(1)}%</strong><span>PID {service.pid}</span></div>
-      <div className="resource"><strong>{formatBytes(service.memoryBytes)}</strong><span>{service.name}</span></div>
-      <div className="resource"><strong>{formatUptime(service.uptimeSeconds)}</strong><span>{service.confidence}% match</span></div>
-      <div className="row-actions">
-        <button disabled={!primaryPort.url} onClick={() => onAction("open_service", { request: { url: primaryPort.url } })} aria-label={`Open ${service.displayName}`} title="Open in browser"><ExternalLink size={15} /></button>
-        <button disabled={!service.canReveal} onClick={() => onAction("reveal_process_directory", { pid: service.pid })} aria-label={`Reveal ${service.displayName}`} title="Reveal directory"><FolderOpen size={15} /></button>
-        <button className="false-positive-action" onClick={() => onFalsePositive(service, !marked)} aria-label={`${marked ? "Restore" : "Mark"} ${service.displayName}`} title={marked ? "Restore to main results" : "Mark as false positive"}>{marked ? <RotateCcw size={15} /> : <EyeOff size={15} />}</button>
-        <button className="stop" disabled={!service.canStop} onClick={() => onStop(service)} aria-label={`Stop ${service.displayName}`} title={service.docker ? "Container controls are disabled in version 1" : "Stop process tree"}><CircleStop size={15} /></button>
-      </div>
-    </article>
+    <section className="section">
+      <h2>{title}</h2>
+      {children}
+    </section>
   );
+}
+
+function ServiceRow({
+  service,
+  hidden,
+  stopping,
+  expanded,
+  onToggle,
+  actions,
+}: {
+  service: Service;
+  hidden: boolean;
+  stopping: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  actions: Actions;
+}) {
+  const meta = [
+    serviceDetail(service),
+    service.uptimeSeconds > 0 && formatUptime(service.uptimeSeconds),
+    service.memoryBytes > 0 && formatBytes(service.memoryBytes),
+  ].filter(Boolean);
+  const extraPorts = service.ports.length - MAX_VISIBLE_PORTS;
+
+  return (
+    <li className={`service ${expanded ? "expanded" : ""} ${stopping ? "stopping" : ""}`}>
+      <div
+        className="service-row"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={onToggle}
+        onKeyDown={(event) => {
+          if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+            event.preventDefault();
+            onToggle();
+          }
+        }}
+      >
+        <ServiceIcon service={service} />
+        <div className="service-title">
+          <span className="service-name">{service.displayName}</span>
+          <span className="service-meta">{stopping ? "Stopping…" : meta.join(" · ")}</span>
+        </div>
+        <div className="ports">
+          {service.ports.slice(0, MAX_VISIBLE_PORTS).map((port) => (
+            <PortChip key={port.port} port={port} actions={actions} />
+          ))}
+          {extraPorts > 0 && <span className="more-ports">+{extraPorts}</span>}
+        </div>
+        <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+          {service.canReveal && (
+            <IconButton label="Open folder" onClick={() => actions.reveal(service)}>
+              <FolderOpen size={15} />
+            </IconButton>
+          )}
+          <IconButton label={hidden ? "Unhide" : "Hide from list"} onClick={() => actions.toggleHidden(service)}>
+            {hidden ? <Eye size={15} /> : <EyeOff size={15} />}
+          </IconButton>
+          {service.canStop && <StopButton disabled={stopping} onConfirm={() => actions.stop(service)} />}
+        </div>
+      </div>
+      {expanded && <ServiceDetails service={service} actions={actions} />}
+    </li>
+  );
+}
+
+function PortChip({ port, actions }: { port: PortInfo; actions: Actions }) {
+  const address = portAddress(port);
+  return (
+    <button
+      className={`port ${port.url ? "link" : ""}`}
+      title={port.url ? `Open ${port.url}` : `Copy ${address}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (port.url) actions.open(port.url);
+        else actions.copy(address);
+      }}
+    >
+      :{port.port}
+    </button>
+  );
+}
+
+function StopButton({ disabled, onConfirm }: { disabled: boolean; onConfirm: () => void }) {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const timer = window.setTimeout(() => setArmed(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [armed]);
+
+  if (armed) {
+    return (
+      <button
+        className="confirm-stop"
+        autoFocus
+        onBlur={() => setArmed(false)}
+        onClick={() => {
+          setArmed(false);
+          onConfirm();
+        }}
+      >
+        Stop
+      </button>
+    );
+  }
+  return (
+    <IconButton label="Stop" danger disabled={disabled} onClick={() => setArmed(true)}>
+      <Square size={11} fill="currentColor" />
+    </IconButton>
+  );
+}
+
+function IconButton({
+  label,
+  onClick,
+  children,
+  danger = false,
+  disabled = false,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+  danger?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      className={`icon-button ${danger ? "danger" : ""}`}
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ServiceDetails({ service, actions }: { service: Service; actions: Actions }) {
+  const rows: [string, ReactNode][] = [];
+  if (service.docker) {
+    rows.push(["Container", service.docker.name], ["Image", service.docker.image]);
+  }
+  if (service.command) rows.push(["Command", <code key="command">{service.command}</code>]);
+  if (service.workingDirectory) rows.push(["Folder", <code key="folder">{service.workingDirectory}</code>]);
+  rows.push([
+    "Ports",
+    <span key="ports" className="detail-ports">
+      {service.ports.map((port) => (
+        <button key={port.port} className="text-button" onClick={() => actions.copy(port.url ?? portAddress(port))}>
+          {port.url ?? portAddress(port)}
+        </button>
+      ))}
+    </span>,
+  ]);
+  if (service.pid !== undefined) {
+    rows.push(
+      ["Process", `${service.name} (PID ${service.pid})`],
+      ["Resources", `${service.cpuPercent.toFixed(1)}% CPU · ${formatBytes(service.memoryBytes)}`],
+    );
+  } else if (!service.docker) {
+    rows.push(["Process", "Owned by another user or the system. Run the app with elevated rights to see more."]);
+  }
+
+  return (
+    <dl className="details">
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function ServiceIcon({ service }: { service: Service }) {
+  const brand = frameworkIcon(service.framework);
+  const Fallback = categoryIcons[service.category] ?? Server;
+  return <div className="service-icon">{brand ? <BrandIcon icon={brand} /> : <Fallback size={16} />}</div>;
 }
 
 function BrandIcon({ icon }: { icon: SimpleIcon }) {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="brand-icon" style={{ color: `#${icon.hex}` }}>
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-label={icon.title} role="img">
       <path fill="currentColor" d={icon.path} />
     </svg>
   );
 }
 
-function EmptyState({ title, detail, loading = false, compact = false }: { title: string; detail: string; loading?: boolean; compact?: boolean }) {
-  return <div className={`empty ${compact ? "compact" : ""}`}><div className={loading ? "empty-pulse" : ""}><Server size={24} /></div><strong>{title}</strong><p>{detail}</p></div>;
+function EmptyState({ title, detail }: { title: string; detail?: ReactNode }) {
+  return (
+    <div className="empty">
+      <strong>{title}</strong>
+      {detail && <p>{detail}</p>}
+    </div>
+  );
 }
 
 export default App;

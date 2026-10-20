@@ -1,24 +1,30 @@
+mod detect;
+
+use detect::{classify, classify_image, docker_host_ports, protocol_for, url_host};
 use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     net::IpAddr,
     path::{Path, PathBuf},
     process::Command,
     sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
+use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind};
 use tauri::State;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+/// How long to wait before asking Docker again after it was not reachable.
+const DOCKER_RETRY: Duration = Duration::from_secs(30);
+
 struct AppState {
     system: Mutex<System>,
+    docker_unavailable_until: Mutex<Option<Instant>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -26,7 +32,6 @@ struct AppState {
 struct PortInfo {
     port: u16,
     address: String,
-    protocol: Option<String>,
     url: Option<String>,
 }
 
@@ -38,19 +43,17 @@ struct DockerInfo {
     image: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Service {
     id: String,
-    pid: u32,
+    pid: Option<u32>,
     name: String,
     display_name: String,
     command: String,
     working_directory: Option<String>,
-    parent_pid: Option<u32>,
-    category: String,
+    category: &'static str,
     framework: String,
-    confidence: u8,
     is_likely_dev: bool,
     cpu_percent: f32,
     memory_bytes: u64,
@@ -59,7 +62,7 @@ struct Service {
     docker: Option<DockerInfo>,
     can_stop: bool,
     can_reveal: bool,
-    false_positive_key: String,
+    hide_key: String,
 }
 
 #[derive(Serialize)]
@@ -67,8 +70,6 @@ struct Service {
 struct ScanResult {
     services: Vec<Service>,
     scanned_at: u64,
-    listener_count: usize,
-    inaccessible_count: usize,
     docker_available: bool,
 }
 
@@ -79,10 +80,20 @@ struct ActionResult {
     message: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OpenServiceRequest {
-    url: String,
+impl ActionResult {
+    fn ok(message: impl Into<String>) -> Self {
+        Self {
+            success: true,
+            message: message.into(),
+        }
+    }
+
+    fn fail(message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            message: message.into(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -97,148 +108,67 @@ struct DockerRow {
     ports: String,
 }
 
-fn classify(name: &str, command: &str, ports: &[PortInfo]) -> (String, String, u8, bool) {
-    let haystack = format!("{} {}", name, command).to_lowercase();
-    let rules = [
-        ("next", "Next.js", "web", 98),
-        ("astro", "Astro", "web", 98),
-        ("vite", "Vite", "web", 96),
-        ("nuxt", "Nuxt", "web", 96),
-        ("svelte", "SvelteKit", "web", 94),
-        ("remix", "Remix", "web", 94),
-        ("ng serve", "Angular", "web", 94),
-        ("webpack", "webpack", "web", 90),
-        ("parcel", "Parcel", "web", 90),
-        ("supabase", "Supabase", "database", 98),
-        ("postgres", "PostgreSQL", "database", 96),
-        ("mysqld", "MySQL", "database", 96),
-        ("mariadb", "MariaDB", "database", 96),
-        ("redis", "Redis", "database", 96),
-        ("mongod", "MongoDB", "database", 96),
-        ("elasticsearch", "Elasticsearch", "database", 96),
-        ("deno", "Deno", "runtime", 82),
-        ("bun", "Bun", "runtime", 82),
-        ("node", "Node.js", "runtime", 78),
-        ("python", "Python", "runtime", 76),
-        ("dotnet", ".NET", "runtime", 76),
-        ("rails", "Rails", "web", 88),
-        ("php", "PHP", "runtime", 72),
-    ];
-    for (needle, framework, category, confidence) in rules {
-        if haystack.contains(needle) {
-            return (
-                category.to_string(),
-                framework.to_string(),
-                confidence,
-                true,
-            );
-        }
-    }
-
-    let database_port = ports
-        .iter()
-        .any(|p| matches!(p.port, 5432 | 3306 | 6379 | 27017 | 9200));
-    let dev_port = ports.iter().any(|p| {
-        matches!(
-            p.port,
-            3000..=3999 | 4173 | 4200 | 4321 | 5000..=5999 | 8000..=8999
-        )
-    });
-    if database_port {
-        ("database".into(), "Database".into(), 65, true)
-    } else if dev_port {
-        ("web".into(), "Local server".into(), 58, true)
-    } else {
-        ("unknown".into(), "Unknown listener".into(), 20, false)
-    }
+struct Container {
+    info: DockerInfo,
+    ports: Vec<u16>,
 }
 
-fn protocol_for(port: u16, category: &str) -> Option<&'static str> {
-    if category == "database" {
-        return None;
-    }
-    match port {
-        443 | 8443 => Some("https"),
-        _ => Some("http"),
-    }
-}
-
-fn docker_services() -> (bool, HashMap<u16, DockerInfo>) {
-    let mut command = Command::new("docker");
-    command.args(["ps", "--format", "{{json .}}"]);
+fn quiet_command(program: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(program);
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
 
-    let output = match command.output() {
+fn docker_containers(state: &AppState) -> Option<Vec<Container>> {
+    let mut unavailable_until = state.docker_unavailable_until.lock().ok()?;
+    if unavailable_until.is_some_and(|until| Instant::now() < until) {
+        return None;
+    }
+    let output = quiet_command("docker")
+        .args(["ps", "--no-trunc", "--format", "{{json .}}"])
+        .output();
+    let output = match output {
         Ok(output) if output.status.success() => output,
-        _ => return (false, HashMap::new()),
-    };
-    let port_re = Regex::new(r"(?:0\.0\.0\.0|\[::\]|127\.0\.0\.1):(\d+)->").unwrap();
-    let mut by_port = HashMap::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let Ok(row) = serde_json::from_str::<DockerRow>(line) else {
-            continue;
-        };
-        for capture in port_re.captures_iter(&row.ports) {
-            if let Ok(port) = capture[1].parse::<u16>() {
-                by_port.insert(
-                    port,
-                    DockerInfo {
-                        container_id: row.id.clone(),
-                        name: row.names.clone(),
-                        image: row.image.clone(),
-                    },
-                );
-            }
+        _ => {
+            *unavailable_until = Some(Instant::now() + DOCKER_RETRY);
+            return None;
         }
-    }
-    (true, by_port)
-}
-
-fn display_address(address: IpAddr) -> String {
-    if address.is_unspecified() {
-        "localhost".into()
-    } else {
-        address.to_string()
-    }
-}
-
-fn false_positive_key(
-    executable: Option<&Path>,
-    name: &str,
-    docker: Option<&DockerInfo>,
-) -> String {
-    if let Some(docker) = docker {
-        return format!("docker:{}", docker.name);
-    }
-
-    let identity = executable
-        .map(|path| path.to_string_lossy().into_owned())
-        .filter(|path| !path.is_empty())
-        .unwrap_or_else(|| name.to_string());
-    #[cfg(windows)]
-    let identity = identity.to_lowercase();
-
-    format!("process:{identity}")
-}
-
-#[tauri::command]
-fn scan_services(state: State<AppState>) -> Result<ScanResult, String> {
-    let af_flags = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
-    let proto_flags = ProtocolFlags::TCP;
-    let sockets = get_sockets_info(af_flags, proto_flags).map_err(|error| error.to_string())?;
-    let listener_count = sockets
-        .iter()
-        .filter(|socket| {
-            matches!(
-                socket.protocol_socket_info,
-                ProtocolSocketInfo::Tcp(ref tcp) if tcp.state == TcpState::Listen
-            )
+    };
+    *unavailable_until = None;
+    let containers = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<DockerRow>(line).ok())
+        .map(|row| Container {
+            ports: docker_host_ports(&row.ports),
+            info: DockerInfo {
+                container_id: row.id,
+                name: row.names.split(',').next().unwrap_or_default().to_string(),
+                image: row.image,
+            },
         })
-        .count();
+        .collect();
+    Some(containers)
+}
 
-    let mut ports_by_pid: HashMap<u32, Vec<PortInfo>> = HashMap::new();
-    let mut inaccessible_count = 0;
+fn now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Every listening TCP port, grouped by owning PID. Sockets whose owner cannot
+/// be read (e.g. root-owned `docker-proxy` on Linux) are kept under `None`
+/// instead of being dropped.
+fn listeners() -> Result<HashMap<Option<u32>, BTreeMap<u16, IpAddr>>, String> {
+    let sockets = get_sockets_info(
+        AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6,
+        ProtocolFlags::TCP,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut by_pid: HashMap<Option<u32>, BTreeMap<u16, IpAddr>> = HashMap::new();
     for socket in sockets {
         let ProtocolSocketInfo::Tcp(tcp) = socket.protocol_socket_info else {
             continue;
@@ -246,20 +176,172 @@ fn scan_services(state: State<AppState>) -> Result<ScanResult, String> {
         if tcp.state != TcpState::Listen {
             continue;
         }
-        if socket.associated_pids.is_empty() {
-            inaccessible_count += 1;
-        }
-        for pid in socket.associated_pids {
-            ports_by_pid.entry(pid).or_default().push(PortInfo {
-                port: tcp.local_port,
-                address: display_address(tcp.local_addr),
-                protocol: None,
-                url: None,
-            });
+        let owners: Vec<Option<u32>> = if socket.associated_pids.is_empty() {
+            vec![None]
+        } else {
+            socket.associated_pids.into_iter().map(Some).collect()
+        };
+        for owner in owners {
+            let ports = by_pid.entry(owner).or_default();
+            // Prefer the most reachable address when a port is bound twice.
+            let entry = ports.entry(tcp.local_port).or_insert(tcp.local_addr);
+            if tcp.local_addr.is_unspecified() || tcp.local_addr.is_loopback() {
+                *entry = tcp.local_addr;
+            }
         }
     }
+    Ok(by_pid)
+}
 
-    let (docker_available, docker_by_port) = docker_services();
+fn port_infos(ports: &BTreeMap<u16, IpAddr>, category: &str) -> Vec<PortInfo> {
+    ports
+        .iter()
+        .map(|(&port, &address)| {
+            let host = url_host(address);
+            PortInfo {
+                port,
+                url: protocol_for(port, category).map(|scheme| format!("{scheme}://{host}:{port}")),
+                address: host,
+            }
+        })
+        .collect()
+}
+
+fn process_hide_key(process: Option<&Process>, name: &str) -> String {
+    let identity = process
+        .and_then(|process| process.exe())
+        .map(|path| path.to_string_lossy().into_owned())
+        .filter(|path| !path.is_empty())
+        .unwrap_or_else(|| name.to_string());
+    #[cfg(windows)]
+    let identity = identity.to_lowercase();
+    format!("process:{identity}")
+}
+
+fn process_service(pid: u32, ports: &BTreeMap<u16, IpAddr>, system: &System) -> Service {
+    let process = system.process(Pid::from_u32(pid));
+    let name = process
+        .map(|p| p.name().to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Unknown process".into());
+    let args: Vec<String> = process
+        .map(|p| {
+            p.cmd()
+                .iter()
+                .map(|part| part.to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let port_numbers: Vec<u16> = ports.keys().copied().collect();
+    let classification = classify(&name, &args, &port_numbers);
+    let cwd = process.and_then(|p| p.cwd());
+    let display_name = detect::project_name(cwd, &args, detect::home_dir().as_deref())
+        .unwrap_or_else(|| match classification.framework.as_str() {
+            "Other" | "Local server" | "Database" if process.is_some() => name.clone(),
+            framework => framework.to_string(),
+        });
+    Service {
+        id: format!("pid:{pid}"),
+        pid: Some(pid),
+        hide_key: process_hide_key(process, &name),
+        display_name,
+        command: args.join(" "),
+        working_directory: cwd.map(|path| path.to_string_lossy().into_owned()),
+        ports: port_infos(ports, classification.category),
+        category: classification.category,
+        framework: classification.framework,
+        is_likely_dev: classification.is_likely_dev,
+        cpu_percent: process.map_or(0.0, |p| p.cpu_usage()),
+        memory_bytes: process.map_or(0, |p| p.memory()),
+        uptime_seconds: process.map_or(0, |p| p.run_time()),
+        docker: None,
+        can_stop: process.is_some(),
+        can_reveal: cwd.is_some(),
+        name,
+    }
+}
+
+fn restricted_service(port: u16, address: IpAddr) -> Service {
+    let classification = classify("", &[], &[port]);
+    let ports = BTreeMap::from([(port, address)]);
+    Service {
+        id: format!("port:{port}"),
+        pid: None,
+        name: "Restricted process".into(),
+        display_name: format!("Port {port}"),
+        command: String::new(),
+        working_directory: None,
+        ports: port_infos(&ports, classification.category),
+        category: classification.category,
+        framework: classification.framework,
+        is_likely_dev: classification.is_likely_dev,
+        cpu_percent: 0.0,
+        memory_bytes: 0,
+        uptime_seconds: 0,
+        docker: None,
+        can_stop: false,
+        can_reveal: false,
+        hide_key: format!("port:{port}"),
+    }
+}
+
+fn container_service(container: Container, listening: &BTreeMap<u16, IpAddr>) -> Service {
+    let classification = classify_image(&container.info.image, &container.ports);
+    let ports: BTreeMap<u16, IpAddr> = container
+        .ports
+        .iter()
+        .map(|port| {
+            let address = listening
+                .get(port)
+                .copied()
+                .unwrap_or(IpAddr::from([127, 0, 0, 1]));
+            (*port, address)
+        })
+        .collect();
+    Service {
+        id: format!("docker:{}", container.info.container_id),
+        pid: None,
+        name: container.info.image.clone(),
+        display_name: container.info.name.clone(),
+        command: container.info.image.clone(),
+        working_directory: None,
+        ports: port_infos(&ports, classification.category),
+        category: classification.category,
+        framework: classification.framework,
+        is_likely_dev: true,
+        cpu_percent: 0.0,
+        memory_bytes: 0,
+        uptime_seconds: 0,
+        hide_key: format!("docker:{}", container.info.name),
+        docker: Some(container.info),
+        can_stop: true,
+        can_reveal: false,
+    }
+}
+
+#[tauri::command(async)]
+fn scan_services(state: State<AppState>) -> Result<ScanResult, String> {
+    let mut by_pid = listeners()?;
+    let containers = docker_containers(&state);
+    let docker_available = containers.is_some();
+
+    // Ports published by Docker belong to the container, not to whichever
+    // proxy process (docker-proxy, com.docker.backend, wslrelay, ...) happens
+    // to hold the socket. Containers are listed even if no proxy is visible.
+    let mut services = Vec::new();
+    if let Some(containers) = containers {
+        let mut all_listening = BTreeMap::new();
+        for ports in by_pid.values() {
+            all_listening.extend(ports.iter().map(|(port, addr)| (*port, *addr)));
+        }
+        for container in containers.into_iter().filter(|c| !c.ports.is_empty()) {
+            for ports in by_pid.values_mut() {
+                ports.retain(|port, _| !container.ports.contains(port));
+            }
+            services.push(container_service(container, &all_listening));
+        }
+        by_pid.retain(|_, ports| !ports.is_empty());
+    }
+
     let mut system = state
         .system
         .lock()
@@ -267,209 +349,125 @@ fn scan_services(state: State<AppState>) -> Result<ScanResult, String> {
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
-        ProcessRefreshKind::everything(),
+        ProcessRefreshKind::nothing()
+            .with_cpu()
+            .with_memory()
+            .with_cmd(UpdateKind::OnlyIfNotSet)
+            .with_exe(UpdateKind::OnlyIfNotSet)
+            .with_cwd(UpdateKind::OnlyIfNotSet),
     );
-    let mut services = Vec::new();
-    for (pid, mut ports) in ports_by_pid {
-        ports.sort_by_key(|item| item.port);
-        ports.dedup_by_key(|item| item.port);
-        let process = system.process(Pid::from_u32(pid));
-        let name = process
-            .map(|p| p.name().to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Restricted process".into());
-        let command = process
-            .map(|p| {
-                p.cmd()
+
+    for (owner, ports) in &by_pid {
+        match owner {
+            Some(pid) => services.push(process_service(*pid, ports, &system)),
+            None => services.extend(
+                ports
                     .iter()
-                    .map(|part| part.to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .unwrap_or_default();
-        let (category, framework, confidence, is_likely_dev) = classify(&name, &command, &ports);
-        for port in &mut ports {
-            port.protocol = protocol_for(port.port, &category).map(str::to_string);
-            port.url = port
-                .protocol
-                .as_ref()
-                .map(|protocol| format!("{}://{}:{}", protocol, port.address, port.port));
+                    .map(|(port, address)| restricted_service(*port, *address)),
+            ),
         }
-        let docker = ports
-            .iter()
-            .find_map(|port| docker_by_port.get(&port.port).cloned());
-        let is_docker = docker.is_some();
-        let false_positive_key = false_positive_key(
-            process.and_then(|process| process.exe()),
-            &name,
-            docker.as_ref(),
-        );
-        let display_name = docker
-            .as_ref()
-            .map(|value| value.name.clone())
-            .or_else(|| {
-                process
-                    .and_then(|p| p.cwd())
-                    .and_then(|path| path.file_name())
-                    .map(|value| value.to_string_lossy().into_owned())
-            })
-            .unwrap_or_else(|| framework.clone());
-        services.push(Service {
-            id: format!("{}:{}", pid, ports[0].port),
-            pid,
-            name,
-            display_name,
-            command,
-            working_directory: process
-                .and_then(|p| p.cwd())
-                .map(|path| path.to_string_lossy().into_owned()),
-            parent_pid: process.and_then(|p| p.parent()).map(|value| value.as_u32()),
-            category: if is_docker {
-                "container".into()
-            } else {
-                category
-            },
-            framework: if is_docker {
-                "Docker".into()
-            } else {
-                framework
-            },
-            confidence: if is_docker { 100 } else { confidence },
-            is_likely_dev: is_docker || is_likely_dev,
-            cpu_percent: process.map_or(0.0, |p| p.cpu_usage()),
-            memory_bytes: process.map_or(0, |p| p.memory()),
-            uptime_seconds: process.map_or(0, |p| p.run_time()),
-            ports,
-            docker,
-            can_stop: process.is_some() && !is_docker,
-            can_reveal: process.and_then(|p| p.cwd()).is_some(),
-            false_positive_key,
-        });
     }
-    services.sort_by(|a, b| {
-        a.display_name
-            .to_lowercase()
-            .cmp(&b.display_name.to_lowercase())
-    });
+    services.sort_by_key(|service| service.ports.first().map_or(u16::MAX, |port| port.port));
 
     Ok(ScanResult {
         services,
-        scanned_at: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-        listener_count,
-        inaccessible_count,
+        scanned_at: now_seconds(),
         docker_available,
     })
 }
 
 fn collect_descendants(system: &System, root: Pid) -> Vec<Pid> {
+    let mut children: HashMap<Pid, Vec<Pid>> = HashMap::new();
+    for (pid, process) in system.processes() {
+        if let Some(parent) = process.parent() {
+            children.entry(parent).or_default().push(*pid);
+        }
+    }
     let mut result = Vec::new();
     let mut queue = vec![root];
     while let Some(parent) = queue.pop() {
-        for (pid, process) in system.processes() {
-            if process.parent() == Some(parent) && !result.contains(pid) {
-                result.push(*pid);
-                queue.push(*pid);
+        for child in children.get(&parent).into_iter().flatten() {
+            if !result.contains(child) {
+                result.push(*child);
+                queue.push(*child);
             }
         }
     }
     result
 }
 
-#[tauri::command]
+fn plural(count: usize, word: &str) -> String {
+    format!("{count} {word}{}", if count == 1 { "" } else { "es" })
+}
+
+#[tauri::command(async)]
 fn stop_process_tree(pid: u32, state: State<AppState>) -> ActionResult {
     let Ok(mut system) = state.system.lock() else {
-        return ActionResult {
-            success: false,
-            message: "Process scanner unavailable".into(),
-        };
+        return ActionResult::fail("Process scanner unavailable");
     };
     system.refresh_processes(ProcessesToUpdate::All, true);
     let root = Pid::from_u32(pid);
     let mut targets = collect_descendants(&system, root);
     targets.reverse();
     targets.push(root);
-    let mut stopped = 0;
-    for target in targets {
-        if let Some(process) = system.process(target) {
-            if process
+    let stopped = targets
+        .into_iter()
+        .filter_map(|target| system.process(target))
+        .filter(|process| {
+            process
                 .kill_with(Signal::Term)
                 .unwrap_or_else(|| process.kill())
-            {
-                stopped += 1;
-            }
-        }
-    }
-    ActionResult {
-        success: stopped > 0,
-        message: if stopped > 0 {
-            format!(
-                "Stop signal sent to {} process{}",
-                stopped,
-                if stopped == 1 { "" } else { "es" }
-            )
-        } else {
-            "The process is no longer running or could not be stopped".into()
-        },
-    }
-}
-
-fn reveal_path(path: &PathBuf) -> std::io::Result<()> {
-    #[cfg(target_os = "windows")]
-    return Command::new("explorer").arg(path).spawn().map(|_| ());
-    #[cfg(target_os = "macos")]
-    return Command::new("open").arg(path).spawn().map(|_| ());
-    #[cfg(target_os = "linux")]
-    return Command::new("xdg-open").arg(path).spawn().map(|_| ());
-}
-
-#[tauri::command]
-fn reveal_process_directory(pid: u32, state: State<AppState>) -> ActionResult {
-    let Ok(system) = state.system.lock() else {
-        return ActionResult {
-            success: false,
-            message: "Process scanner unavailable".into(),
-        };
-    };
-    let path = system
-        .process(Pid::from_u32(pid))
-        .and_then(|process| process.cwd())
-        .map(PathBuf::from);
-    match path.and_then(|value| reveal_path(&value).ok().map(|_| value)) {
-        Some(path) => ActionResult {
-            success: true,
-            message: format!("Opened {}", path.display()),
-        },
-        None => ActionResult {
-            success: false,
-            message: "Working directory is unavailable".into(),
-        },
-    }
-}
-
-#[tauri::command]
-fn open_service(request: OpenServiceRequest) -> ActionResult {
-    if !request.url.starts_with("http://") && !request.url.starts_with("https://") {
-        return ActionResult {
-            success: false,
-            message: "Only local HTTP and HTTPS URLs can be opened".into(),
-        };
-    }
-    let result = if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(["/C", "start", "", &request.url])
-            .spawn()
-    } else if cfg!(target_os = "macos") {
-        Command::new("open").arg(&request.url).spawn()
+        })
+        .count();
+    if stopped > 0 {
+        ActionResult::ok(format!("Stopped {}", plural(stopped, "process")))
     } else {
-        Command::new("xdg-open").arg(&request.url).spawn()
+        ActionResult::fail("The process is no longer running or could not be stopped")
+    }
+}
+
+#[tauri::command(async)]
+fn stop_container(container_id: String) -> ActionResult {
+    if container_id.is_empty() || !container_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return ActionResult::fail("Invalid container ID");
+    }
+    match quiet_command("docker")
+        .args(["stop", &container_id])
+        .output()
+    {
+        Ok(output) if output.status.success() => ActionResult::ok("Container stopped"),
+        Ok(output) => {
+            ActionResult::fail(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+        Err(error) => ActionResult::fail(error.to_string()),
+    }
+}
+
+#[tauri::command(async)]
+fn reveal_process_directory(pid: u32, state: State<AppState>) -> ActionResult {
+    let path: Option<PathBuf> = state.system.lock().ok().and_then(|system| {
+        system
+            .process(Pid::from_u32(pid))
+            .and_then(|process| process.cwd())
+            .map(Path::to_path_buf)
+    });
+    let Some(path) = path else {
+        return ActionResult::fail("Working directory is unavailable");
     };
-    ActionResult {
-        success: result.is_ok(),
-        message: result
-            .map(|_| format!("Opened {}", request.url))
-            .unwrap_or_else(|error| error.to_string()),
+    match tauri_plugin_opener::open_path(&path, None::<&str>) {
+        Ok(()) => ActionResult::ok(format!("Opened {}", path.display())),
+        Err(error) => ActionResult::fail(error.to_string()),
+    }
+}
+
+#[tauri::command(async)]
+fn open_service(url: String) -> ActionResult {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return ActionResult::fail("Only HTTP and HTTPS URLs can be opened");
+    }
+    match tauri_plugin_opener::open_url(&url, None::<&str>) {
+        Ok(()) => ActionResult::ok(format!("Opened {url}")),
+        Err(error) => ActionResult::fail(error.to_string()),
     }
 }
 
@@ -477,58 +475,35 @@ fn open_service(request: OpenServiceRequest) -> ActionResult {
 mod tests {
     use super::*;
 
-    fn port(port: u16) -> PortInfo {
-        PortInfo {
-            port,
-            address: "localhost".into(),
-            protocol: None,
-            url: None,
-        }
+    #[test]
+    fn falls_back_to_process_name_for_hide_key() {
+        assert_eq!(process_hide_key(None, "svchost.exe"), "process:svchost.exe");
     }
 
     #[test]
-    fn classifies_frameworks_from_command() {
-        assert_eq!(classify("node", "next dev", &[port(3000)]).1, "Next.js");
-        assert_eq!(classify("node", "astro dev", &[port(4321)]).1, "Astro");
-    }
-
-    #[test]
-    fn recognizes_common_dev_ports() {
-        let result = classify("custom", "custom", &[port(5173)]);
-        assert!(result.3);
-        assert_eq!(result.1, "Local server");
-    }
-
-    #[test]
-    fn leaves_unusual_listeners_unclassified() {
-        assert!(!classify("custom", "custom", &[port(123)]).3);
-    }
-
-    #[test]
-    fn builds_false_positive_key_from_executable() {
-        let key = false_positive_key(Some(Path::new("/opt/tools/discord")), "discord", None);
-        assert_eq!(key, "process:/opt/tools/discord");
-    }
-
-    #[test]
-    fn falls_back_to_process_name_for_false_positive_key() {
+    fn restricted_listeners_stay_visible() {
+        let service = restricted_service(5173, IpAddr::from([0, 0, 0, 0]));
+        assert!(service.is_likely_dev);
         assert_eq!(
-            false_positive_key(None, "svchost.exe", None),
-            "process:svchost.exe"
+            service.ports[0].url.as_deref(),
+            Some("http://localhost:5173")
         );
     }
 
     #[test]
-    fn builds_false_positive_key_from_docker_name() {
-        let docker = DockerInfo {
-            container_id: "abc123".into(),
-            name: "local-postgres".into(),
-            image: "postgres:latest".into(),
+    fn containers_own_their_published_ports() {
+        let container = Container {
+            info: DockerInfo {
+                container_id: "abc123".into(),
+                name: "local-postgres".into(),
+                image: "postgres:16".into(),
+            },
+            ports: vec![5432],
         };
-        assert_eq!(
-            false_positive_key(None, "docker", Some(&docker)),
-            "docker:local-postgres"
-        );
+        let service = container_service(container, &BTreeMap::new());
+        assert_eq!(service.framework, "PostgreSQL");
+        assert_eq!(service.hide_key, "docker:local-postgres");
+        assert!(service.ports[0].url.is_none());
     }
 }
 
@@ -536,13 +511,15 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState {
-            system: Mutex::new(System::new_all()),
+            system: Mutex::new(System::new()),
+            docker_unavailable_until: Mutex::new(None),
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             scan_services,
             stop_process_tree,
+            stop_container,
             reveal_process_directory,
             open_service
         ])

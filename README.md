@@ -6,10 +6,12 @@ AI coding agents are pretty good at starting test servers. They are not always a
 
 ## What It Does
 
-- Finds active local servers and shows their ports, commands, folders, memory use, and uptime.
-- Recognizes common frameworks, runtimes, databases, and Docker services.
-- Lets you open a server in your browser, reveal its project folder, or stop its process tree.
-- Shows likely dev services by default, with a toggle for everything else.
+- Finds running dev servers, databases, and Docker containers, and shows them in one list.
+- Click a port to open it in your browser (or copy it, for databases).
+- Click a row to see the full command, folder, PID, and resource use.
+- Stop a server (process tree or Docker container) with two clicks, open its folder, or hide it.
+- Shows likely dev services by default, with a toggle for other processes listening on ports.
+- Follows your system's light or dark theme. Press `/` or `Ctrl+F` to filter.
 - Runs on Windows 10/11, macOS, and Linux.
 - Has no accounts, telemetry, cloud services, or background process.
 
@@ -34,16 +36,25 @@ The finished builds will be in `src-tauri/target/release/bundle/`.
 
 ## What It Recognizes
 
-There is built-in support for Next.js, Astro, Vite, Nuxt, SvelteKit, Remix, Angular, webpack, Parcel, Rails, Node.js, Bun, Deno, Python, PHP, .NET, PostgreSQL, MySQL, MariaDB, Redis, MongoDB, Elasticsearch, Supabase, and common dev ports.
+Detection uses the process name and the script names in its command line (not parent folders, so a project called `my-next-app` is not mistaken for Next.js).
 
-Docker containers are detected and labeled, but the app will not stop them.
+- **Web frameworks:** Next.js, Nuxt, Astro, SvelteKit, Remix, React Router, Gatsby, Docusaurus, Storybook, Angular, Vue CLI, Expo, React Native, Ember, Eleventy, Hugo, Jekyll, Zola, MkDocs, Vite, webpack, Rspack, Parcel, esbuild, Wrangler, Vercel, Netlify, Firebase
+- **Backends:** Django, Flask, FastAPI, Uvicorn, Gunicorn, Streamlit, Jupyter, Rails, Laravel, Symfony, Phoenix, Spring Boot, static servers, json-server, Ollama, ngrok, Mailpit, LocalStack, Caddy, nginx, Apache
+- **Databases and queues:** PostgreSQL, MySQL, MariaDB, Redis, Valkey, MongoDB, Elasticsearch, OpenSearch, Memcached, ClickHouse, CockroachDB, RabbitMQ, Kafka, MinIO, Neo4j, InfluxDB, Meilisearch, Qdrant, SQL Server, Supabase, and more
+- **Runtimes:** Node.js, Bun, Deno, Python, PHP, Ruby, .NET, Java, Go (`go run`), Rust (`cargo run`), Elixir
+- **Containers:** Docker containers are listed with their published ports, even when the proxy process belongs to root. Their image is used to label them (e.g. a `postgres:16` container shows as PostgreSQL).
+- **WSL:** servers forwarded from WSL on Windows.
+
+Unrecognized processes on common dev ports are shown as "Local server". Desktop apps and OS services that happen to use dev-looking ports (Electron apps, AirPlay, Windows services, Steam, Discord, Android emulators, ...) are moved to "other processes".
 
 ## How It Works
 
 The Rust backend scans listening ports, matches them to running processes, and sends the results to the React interface.
 
-- `src-tauri/src/lib.rs`: scanner, service detection, Docker info, and process controls
+- `src-tauri/src/detect.rs`: service detection rules (pure, unit tested)
+- `src-tauri/src/lib.rs`: port scanner, Docker integration, and process controls
 - `src/App.tsx`: app behavior and interface
+- `src/services.ts`: list sections, filtering, and hidden services
 - `src/App.css`: styling
 
 ## Downloads

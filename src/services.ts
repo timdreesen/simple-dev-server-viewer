@@ -1,10 +1,8 @@
-export type Category = "web" | "database" | "container" | "runtime" | "unknown";
-export type SortKey = "name" | "port" | "cpu" | "memory" | "uptime";
+export type Category = "web" | "database" | "container" | "runtime" | "tool" | "unknown";
 
 export interface PortInfo {
   port: number;
   address: string;
-  protocol?: string;
   url?: string;
 }
 
@@ -16,15 +14,13 @@ export interface DockerInfo {
 
 export interface Service {
   id: string;
-  pid: number;
+  pid?: number;
   name: string;
   displayName: string;
   command: string;
   workingDirectory?: string;
-  parentPid?: number;
   category: Category;
   framework: string;
-  confidence: number;
   isLikelyDev: boolean;
   cpuPercent: number;
   memoryBytes: number;
@@ -33,15 +29,29 @@ export interface Service {
   docker?: DockerInfo;
   canStop: boolean;
   canReveal: boolean;
-  falsePositiveKey: string;
+  hideKey: string;
 }
 
-export interface ServiceGroups {
-  main: Service[];
-  falsePositives: Service[];
+export interface ScanResult {
+  services: Service[];
+  scannedAt: number;
+  dockerAvailable: boolean;
 }
 
-export function parseFalsePositiveKeys(value: string | null): Set<string> {
+export interface Sections {
+  /** Likely development servers: the main list. */
+  servers: Service[];
+  /** Everything else that listens on a port. */
+  others: Service[];
+  /** Services the user chose to hide. */
+  hidden: Service[];
+}
+
+export const HIDDEN_STORAGE_KEY = "hiddenKeys";
+/** Storage key used before hiding was renamed from "false positives". */
+export const LEGACY_HIDDEN_STORAGE_KEY = "falsePositiveKeys";
+
+export function parseHiddenKeys(value: string | null): Set<string> {
   if (!value) return new Set();
   try {
     const parsed: unknown = JSON.parse(value);
@@ -51,51 +61,46 @@ export function parseFalsePositiveKeys(value: string | null): Set<string> {
   }
 }
 
-export function serializeFalsePositiveKeys(keys: Set<string>): string {
+export function serializeHiddenKeys(keys: Set<string>): string {
   return JSON.stringify([...keys].sort());
 }
 
-export function groupServices(
-  services: Service[],
-  falsePositiveKeys: Set<string>,
-  showAll: boolean,
-  category: Category | "all",
-  query: string,
-  sortKey: SortKey,
-): ServiceGroups {
+export function matchesQuery(service: Service, query: string): boolean {
   const search = query.trim().toLowerCase();
-  const matchesFilters = (service: Service) =>
-    (category === "all" || service.category === category) &&
-    (!search ||
-      [
-        service.displayName,
-        service.framework,
-        service.command,
-        service.workingDirectory,
-        service.pid,
-        ...service.ports.map((port) => port.port),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(search));
-  const sortServices = (items: Service[]) =>
-    items.sort((a, b) => {
-      if (sortKey === "port") return a.ports[0].port - b.ports[0].port;
-      if (sortKey === "cpu") return b.cpuPercent - a.cpuPercent;
-      if (sortKey === "memory") return b.memoryBytes - a.memoryBytes;
-      if (sortKey === "uptime") return b.uptimeSeconds - a.uptimeSeconds;
-      return a.displayName.localeCompare(b.displayName);
-    });
+  if (!search) return true;
+  return [
+    service.displayName,
+    service.name,
+    service.framework,
+    service.command,
+    service.workingDirectory,
+    service.docker?.image,
+    service.pid,
+    ...service.ports.map((port) => port.port),
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(search);
+}
 
-  const matching = services.filter(matchesFilters);
-  return {
-    main: sortServices(
-      matching.filter(
-        (service) => !falsePositiveKeys.has(service.falsePositiveKey) && (showAll || service.isLikelyDev),
-      ),
-    ),
-    falsePositives: sortServices(
-      matching.filter((service) => falsePositiveKeys.has(service.falsePositiveKey)),
-    ),
-  };
+export function sectionServices(services: Service[], hiddenKeys: Set<string>, query: string): Sections {
+  const sections: Sections = { servers: [], others: [], hidden: [] };
+  for (const service of services) {
+    if (!matchesQuery(service, query)) continue;
+    if (hiddenKeys.has(service.hideKey)) sections.hidden.push(service);
+    else if (service.isLikelyDev) sections.servers.push(service);
+    else sections.others.push(service);
+  }
+  return sections;
+}
+
+/** What the port chip shows and what gets copied for non-browsable ports. */
+export function portAddress(port: PortInfo): string {
+  return `${port.address}:${port.port}`;
+}
+
+export function serviceDetail(service: Service): string {
+  if (service.docker) return service.framework === "Docker" ? service.docker.image : `${service.framework} · Docker`;
+  if (service.pid === undefined) return "Owned by another user";
+  return service.framework === "Other" ? service.name : service.framework;
 }
