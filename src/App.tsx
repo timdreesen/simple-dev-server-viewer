@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Box, Database, Eye, EyeOff, FolderOpen, Globe, Search, Server, Square, TerminalSquare, Wrench, X } from "lucide-react";
+import { Box, Database, Eye, EyeOff, FolderOpen, Globe, Search, Server, Smartphone, Square, TerminalSquare, X } from "lucide-react";
 import type { SimpleIcon } from "simple-icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import "./App.css";
 import { formatBytes, formatUptime } from "./format";
 import { frameworkIcon } from "./icons";
 import {
+  groupServices,
   HIDDEN_STORAGE_KEY,
   LEGACY_HIDDEN_STORAGE_KEY,
   parseHiddenKeys,
@@ -40,7 +41,7 @@ const categoryIcons: Record<Category, typeof Server> = {
   database: Database,
   container: Box,
   runtime: TerminalSquare,
-  tool: Wrench,
+  emulator: Smartphone,
   unknown: Server,
 };
 
@@ -192,11 +193,21 @@ function App() {
     </ul>
   );
 
+  const renderGroups = (services: Service[]) => {
+    const groups = groupServices(services);
+    if (groups.length === 1) return renderList(services);
+    return groups.map((group, index) => (
+      <Section key={group.title} title={group.title} first={index === 0}>
+        {renderList(group.services)}
+      </Section>
+    ));
+  };
+
   return (
     <div className="app">
       <header className="topbar">
         <h1>
-          Dev servers {scan && <span className="count">{sections.servers.length}</span>}
+          Running {scan && <span className="count">{sections.servers.length}</span>}
         </h1>
         <label className="search">
           <Search size={14} aria-hidden />
@@ -224,12 +235,12 @@ function App() {
         ) : (
           <>
             {sections.servers.length > 0 ? (
-              renderList(sections.servers)
+              renderGroups(sections.servers)
             ) : query ? (
               <EmptyState title="No matches" detail={`Nothing running matches “${query}”.`} />
             ) : (
               <EmptyState
-                title="No dev servers running"
+                title="Nothing running"
                 detail={
                   <>
                     Start one, for example <code>npm run dev</code>, and it shows up here automatically.
@@ -277,9 +288,9 @@ function App() {
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, children, first = false }: { title: string; children: ReactNode; first?: boolean }) {
   return (
-    <section className="section">
+    <section className={`section ${first ? "first" : ""}`}>
       <h2>{title}</h2>
       {children}
     </section>

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    simple_dev_server_viewer_lib::run()
+    devtop_lib::run()
 }

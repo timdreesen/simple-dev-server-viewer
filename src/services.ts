@@ -1,4 +1,4 @@
-export type Category = "web" | "database" | "container" | "runtime" | "tool" | "unknown";
+export type Category = "web" | "database" | "container" | "runtime" | "emulator" | "unknown";
 
 export interface PortInfo {
   port: number;
@@ -39,7 +39,7 @@ export interface ScanResult {
 }
 
 export interface Sections {
-  /** Likely development servers: the main list. */
+  /** Likely development services: the main list. */
   servers: Service[];
   /** Everything else that listens on a port. */
   others: Service[];
@@ -92,6 +92,26 @@ export function sectionServices(services: Service[], hiddenKeys: Set<string>, qu
     else sections.others.push(service);
   }
   return sections;
+}
+
+export interface Group {
+  title: string;
+  services: Service[];
+}
+
+const groupTitles = ["Servers", "Databases", "Emulators"] as const;
+
+function groupTitle(service: Service): (typeof groupTitles)[number] {
+  if (service.category === "database") return "Databases";
+  if (service.category === "emulator") return "Emulators";
+  return "Servers";
+}
+
+/** Splits the main list by kind, keeping the scan order inside each group. */
+export function groupServices(services: Service[]): Group[] {
+  return groupTitles
+    .map((title) => ({ title, services: services.filter((service) => groupTitle(service) === title) }))
+    .filter((group) => group.services.length > 0);
 }
 
 /** What the port chip shows and what gets copied for non-browsable ports. */

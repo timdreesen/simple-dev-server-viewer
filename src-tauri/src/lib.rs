@@ -234,11 +234,15 @@ fn process_service(pid: u32, ports: &BTreeMap<u16, IpAddr>, system: &System) -> 
     let port_numbers: Vec<u16> = ports.keys().copied().collect();
     let classification = classify(&name, &args, &port_numbers);
     let cwd = process.and_then(|p| p.cwd());
-    let display_name = detect::project_name(cwd, &args, detect::home_dir().as_deref())
-        .unwrap_or_else(|| match classification.framework.as_str() {
-            "Other" | "Local server" | "Database" if process.is_some() => name.clone(),
-            framework => framework.to_string(),
-        });
+    let display_name = if classification.category == "emulator" {
+        detect::emulator_name(&args)
+    } else {
+        detect::project_name(cwd, &args, detect::home_dir().as_deref())
+    }
+    .unwrap_or_else(|| match classification.framework.as_str() {
+        "Other" | "Local server" | "Database" if process.is_some() => name.clone(),
+        framework => framework.to_string(),
+    });
     Service {
         id: format!("pid:{pid}"),
         pid: Some(pid),
@@ -524,5 +528,5 @@ pub fn run() {
             open_service
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Simple Dev Server Viewer");
+        .expect("error while running Devtop");
 }

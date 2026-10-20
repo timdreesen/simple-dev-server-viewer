@@ -149,7 +149,8 @@ const RULES: &[Rule] = &[
         "container",
         &["podman", "gvproxy", "conmon", "rootlessport"],
     ),
-    rule("Emulator", "tool", &["adb", "qemu", "netsimd", "emulator"]),
+    rule("Android Emulator", "emulator", &["qemu", "emulator"]),
+    rule("ADB", "emulator", &["adb"]),
     rule("Deno", "runtime", &["deno"]),
     rule("Bun", "runtime", &["bun"]),
     rule("Node.js", "runtime", &["node", "nodejs"]),
@@ -218,6 +219,8 @@ const IGNORED_PROCESSES: &[&str] = &[
     "nvcontainer",
     "jetbrains-toolbox",
     "1password",
+    // Android emulator networking helper; the emulator itself is listed.
+    "netsimd",
 ];
 
 const DATABASE_PORTS: &[u16] = &[
@@ -331,7 +334,7 @@ pub fn classify(name: &str, args: &[String], ports: &[u16]) -> Classification {
         return Classification {
             category: rule.category,
             framework: rule.framework.into(),
-            is_likely_dev: rule.category != "tool",
+            is_likely_dev: true,
         };
     }
 
@@ -348,7 +351,7 @@ pub fn classify_image(image: &str, ports: &[u16]) -> Classification {
         .map_or(repository, |(name, _)| name);
     let basename = repository.rsplit('/').next().unwrap_or(repository);
     match matching_rule(&tokens(basename, &[])) {
-        Some(rule) if !matches!(rule.category, "runtime" | "tool") => Classification {
+        Some(rule) if !matches!(rule.category, "runtime" | "emulator") => Classification {
             category: rule.category,
             framework: rule.framework.into(),
             is_likely_dev: true,
@@ -425,7 +428,7 @@ pub fn url_host(address: IpAddr) -> String {
 }
 
 pub fn protocol_for(port: u16, category: &str) -> Option<&'static str> {
-    if matches!(category, "database" | "tool") {
+    if matches!(category, "database" | "emulator") {
         return None;
     }
     match port {
@@ -461,6 +464,18 @@ pub fn project_name(cwd: Option<&Path>, args: &[String], home: Option<&Path>) ->
     }
     cwd.file_name()
         .map(|name| name.to_string_lossy().into_owned())
+}
+
+/// The virtual device name of an Android emulator (`-avd Pixel_8_API_35`).
+pub fn emulator_name(args: &[String]) -> Option<String> {
+    args.iter()
+        .position(|arg| arg == "-avd" || arg == "@")
+        .and_then(|index| args.get(index + 1))
+        .or_else(|| {
+            args.iter()
+                .find_map(|arg| arg.strip_prefix('@').filter(|n| !n.is_empty()).map(|_| arg))
+        })
+        .map(|name| name.trim_start_matches('@').replace('_', " "))
 }
 
 pub fn home_dir() -> Option<PathBuf> {
@@ -599,8 +614,14 @@ mod tests {
             &args("qemu-system-x86_64-headless -avd x"),
             &[5554],
         );
-        assert_eq!(emulator.framework, "Emulator");
-        assert!(!emulator.is_likely_dev);
+        assert_eq!(emulator.framework, "Android Emulator");
+        assert!(emulator.is_likely_dev);
+        assert_eq!(emulator.category, "emulator");
+        assert_eq!(
+            framework("adb", "adb -L tcp:5037 fork-server server", &[5037]),
+            "ADB"
+        );
+        assert!(!classify("netsimd", &[], &[6402]).is_likely_dev);
     }
 
     #[test]
@@ -646,6 +667,21 @@ mod tests {
         assert_eq!(url_host("::1".parse().unwrap()), "localhost");
         assert_eq!(url_host("192.168.1.5".parse().unwrap()), "192.168.1.5");
         assert_eq!(url_host("fe80::1".parse().unwrap()), "[fe80::1]");
+    }
+
+    #[test]
+    fn derives_emulator_names() {
+        assert_eq!(
+            emulator_name(&args(
+                "qemu-system-x86_64-headless -avd Pixel_8_API_35 -port 5554"
+            )),
+            Some("Pixel 8 API 35".into())
+        );
+        assert_eq!(
+            emulator_name(&args("emulator @doko-api35")),
+            Some("doko-api35".into())
+        );
+        assert_eq!(emulator_name(&args("adb fork-server")), None);
     }
 
     #[test]

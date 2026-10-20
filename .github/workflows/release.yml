@@ -37,7 +37,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: Simple Dev Server Viewer ${{ github.ref_name }}
+          releaseName: Devtop ${{ github.ref_name }}
           releaseBody: |
             ## Downloads
 
@@ -57,7 +57,7 @@ jobs:
             These community builds are unsigned, so Windows SmartScreen and macOS Gatekeeper warnings may appear.
           releaseDraft: true
           prerelease: false
-          assetNamePattern: Simple-Dev-Server-Viewer-[version]-[platform]-[arch]-[bundle][ext]
+          assetNamePattern: Devtop-[version]-[platform]-[arch]-[bundle][ext]
           args: ${{ matrix.args }}
       - name: Upload Windows portable executable
         if: runner.os == 'Windows'
@@ -67,6 +67,6 @@ jobs:
           APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
         run: |
           npm run tauri build -- --no-bundle
-          $portable = "Simple-Dev-Server-Viewer-$env:APP_VERSION-windows-x64-PORTABLE.exe"
-          Copy-Item "src-tauri/target/release/simple-dev-server-viewer.exe" $portable
+          $portable = "Devtop-$env:APP_VERSION-windows-x64-PORTABLE.exe"
+          Copy-Item "src-tauri/target/release/devtop.exe" $portable
           gh release upload "${{ github.ref_name }}" "$portable#Windows portable (no install)" --clobber

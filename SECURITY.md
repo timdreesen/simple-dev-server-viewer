@@ -8,4 +8,4 @@ Include affected versions, reproduction steps, impact, and any suggested mitigat
 
 ## Scope
 
-Simple Dev Server Viewer reads local process metadata and can terminate processes selected by the user. It does not require elevated privileges, send telemetry, or accept remote connections. Treat builds from untrusted sources as untrusted executables.
+Devtop reads local process metadata and can terminate processes selected by the user. It does not require elevated privileges, send telemetry, or accept remote connections. Treat builds from untrusted sources as untrusted executables.

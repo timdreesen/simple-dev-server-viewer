@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  groupServices,
   parseHiddenKeys,
   portAddress,
   sectionServices,
@@ -85,5 +86,21 @@ describe("display helpers", () => {
     expect(serviceDetail(service({ pid: undefined }))).toBe("Owned by another user");
     expect(serviceDetail(service({ framework: "Other", name: "steam" }))).toBe("steam");
     expect(serviceDetail(service({}))).toBe("Node.js");
+  });
+});
+
+describe("groupServices", () => {
+  it("groups servers, databases, and emulators in a fixed order", () => {
+    const groups = groupServices([
+      service({ id: "e", category: "emulator", displayName: "Pixel 8" }),
+      service({ id: "d", category: "database", displayName: "db" }),
+      service({ id: "w", displayName: "web" }),
+      service({ id: "c", category: "container", displayName: "api" }),
+    ]);
+    expect(groups.map((group) => [group.title, group.services.map((item) => item.displayName)])).toEqual([
+      ["Servers", ["web", "api"]],
+      ["Databases", ["db"]],
+      ["Emulators", ["Pixel 8"]],
+    ]);
   });
 });

@@ -1,12 +1,12 @@
-# Simple Dev Server Viewer
+# Devtop
 
-A small task manager for local dev servers.
+A small task manager for everything your dev work runs locally: dev servers, databases, containers, and emulators.
 
 AI coding agents are pretty good at starting test servers. They are not always as good at turning them off. This app gives you one place to see what is running, which ports it is using, and how to stop it.
 
 ## What It Does
 
-- Finds running dev servers, databases, and Docker containers, and shows them in one list.
+- Finds running dev servers, databases, Docker containers, and Android emulators, grouped in one list.
 - Click a port to open it in your browser (or copy it, for databases).
 - Click a row to see the full command, folder, PID, and resource use.
 - Stop a server (process tree or Docker container) with two clicks, open its folder, or hide it.
@@ -44,8 +44,9 @@ Detection uses the process name and the script names in its command line (not pa
 - **Runtimes:** Node.js, Bun, Deno, Python, PHP, Ruby, .NET, Java, Go (`go run`), Rust (`cargo run`), Elixir
 - **Containers:** Docker containers are listed with their published ports, even when the proxy process belongs to root. Their image is used to label them (e.g. a `postgres:16` container shows as PostgreSQL).
 - **WSL:** servers forwarded from WSL on Windows.
+- **Emulators:** Android emulators (named after their virtual device) and ADB.
 
-Unrecognized processes on common dev ports are shown as "Local server". Desktop apps and OS services that happen to use dev-looking ports (Electron apps, AirPlay, Windows services, Steam, Discord, Android emulators, ...) are moved to "other processes".
+Unrecognized processes on common dev ports are shown as "Local server". Desktop apps and OS services that happen to use dev-looking ports (Electron apps, AirPlay, Windows services, Steam, Discord, ...) are moved to "other processes".
 
 ## How It Works
 

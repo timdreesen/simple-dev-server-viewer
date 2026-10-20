@@ -1,4 +1,4 @@
-# Building Simple Dev Server Viewer
+# Building Devtop
 
 This project uses Tauri 2, Rust, React, TypeScript, Vite, and npm. Build the application on the operating system you intend to target. Tauri does not generally support producing Windows, macOS, and Linux desktop bundles from a single host.
 
