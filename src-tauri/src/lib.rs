@@ -1,7 +1,9 @@
 mod detect;
 mod preview;
 
-use detect::{classify, classify_image, docker_host_ports, protocol_for, url_host};
+use detect::{
+    classify, classify_image, compose_project, docker_host_ports, protocol_for, url_host,
+};
 use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState};
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
@@ -64,6 +66,10 @@ struct Service {
     can_stop: bool,
     can_reveal: bool,
     hide_key: String,
+    /// Groups services that belong together: a Docker Compose project or the
+    /// folder a process runs from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -127,11 +133,14 @@ struct DockerRow {
     image: String,
     #[serde(rename = "Ports")]
     ports: String,
+    #[serde(rename = "Labels", default)]
+    labels: String,
 }
 
 struct Container {
     info: DockerInfo,
     ports: Vec<u16>,
+    project: Option<String>,
 }
 
 fn quiet_command(program: &str) -> Command {
@@ -163,6 +172,7 @@ fn docker_containers(state: &AppState) -> Option<Vec<Container>> {
         .filter_map(|line| serde_json::from_str::<DockerRow>(line).ok())
         .map(|row| Container {
             ports: docker_host_ports(&row.ports),
+            project: compose_project(&row.labels),
             info: DockerInfo {
                 container_id: row.id,
                 name: row.names.split(',').next().unwrap_or_default().to_string(),
@@ -255,10 +265,15 @@ fn process_service(pid: u32, ports: &BTreeMap<u16, IpAddr>, system: &System) -> 
     let port_numbers: Vec<u16> = ports.keys().copied().collect();
     let classification = classify(&name, &args, &port_numbers);
     let cwd = process.and_then(|p| p.cwd());
+    let project = if classification.category == "emulator" {
+        None
+    } else {
+        detect::project_name(cwd, &args, detect::home_dir().as_deref())
+    };
     let display_name = if classification.category == "emulator" {
         detect::emulator_name(&args)
     } else {
-        detect::project_name(cwd, &args, detect::home_dir().as_deref())
+        project.clone()
     }
     .unwrap_or_else(|| match classification.framework.as_str() {
         "Other" | "Local server" | "Database" if process.is_some() => name.clone(),
@@ -281,6 +296,7 @@ fn process_service(pid: u32, ports: &BTreeMap<u16, IpAddr>, system: &System) -> 
         docker: None,
         can_stop: process.is_some(),
         can_reveal: cwd.is_some(),
+        project,
         name,
     }
 }
@@ -306,6 +322,7 @@ fn restricted_service(port: u16, address: IpAddr) -> Service {
         can_stop: false,
         can_reveal: false,
         hide_key: format!("port:{port}"),
+        project: None,
     }
 }
 
@@ -340,6 +357,7 @@ fn container_service(container: Container, listening: &BTreeMap<u16, IpAddr>) ->
         docker: Some(container.info),
         can_stop: true,
         can_reveal: false,
+        project: container.project,
     }
 }
 
@@ -534,9 +552,11 @@ mod tests {
                 image: "postgres:16".into(),
             },
             ports: vec![5432],
+            project: Some("shop".into()),
         };
         let service = container_service(container, &BTreeMap::new());
         assert_eq!(service.framework, "PostgreSQL");
+        assert_eq!(service.project.as_deref(), Some("shop"));
         assert_eq!(service.hide_key, "docker:local-postgres");
         assert!(service.ports[0].url.is_none());
     }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setLocale } from "./i18n";
 import {
+  groupByProject,
   groupServices,
   parseHiddenKeys,
   portAddress,
@@ -148,5 +149,21 @@ describe("types", () => {
     const sections = sectionServices(services, new Set(), "", new Set(["Vite", "Other"]));
     expect(sections.servers.map((item) => item.id)).toEqual(["a", "c"]);
     expect(sections.others.map((item) => item.id)).toEqual(["d"]);
+  });
+});
+
+describe("groupByProject", () => {
+  it("groups projects with several services and leaves the rest in order", () => {
+    const { projects, rest } = groupByProject([
+      service({ id: "1", project: "shop" }),
+      service({ id: "2", project: "blog" }),
+      service({ id: "3", project: "shop", category: "database" }),
+      service({ id: "4" }),
+      service({ id: "5", project: "shop", category: "container" }),
+    ]);
+    expect(projects.map((project) => [project.name, project.services.map((item) => item.id)])).toEqual([
+      ["shop", ["1", "5", "3"]],
+    ]);
+    expect(rest.map((item) => item.id)).toEqual(["2", "4"]);
   });
 });

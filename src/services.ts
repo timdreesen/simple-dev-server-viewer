@@ -32,6 +32,8 @@ export interface Service {
   canStop: boolean;
   canReveal: boolean;
   hideKey: string;
+  /** Docker Compose project or the folder a process runs from. */
+  project?: string;
 }
 
 /** Title and icon read from a web service's page; both empty when it isn't HTML. */
@@ -83,6 +85,7 @@ export function matchesQuery(service: Service, query: string): boolean {
     service.framework,
     service.command,
     service.workingDirectory,
+    service.project,
     service.docker?.image,
     service.pid,
     ...service.ports.map((port) => port.port),
@@ -162,6 +165,25 @@ export function typeOptions(services: Service[], selected: Set<string>): TypeOpt
 /** The page a web service serves, used for its title, favicon, and thumbnail. */
 export function previewUrl(service: Service): string | undefined {
   return service.ports.find((port) => port.url)?.url;
+}
+
+export interface ProjectGroup {
+  name: string;
+  services: Service[];
+}
+
+/** Projects with more than one service, by name, and everything else in scan order. */
+export function groupByProject(services: Service[]): { projects: ProjectGroup[]; rest: Service[] } {
+  const byProject = new Map<string, Service[]>();
+  for (const service of services) {
+    if (service.project) byProject.set(service.project, [...(byProject.get(service.project) ?? []), service]);
+  }
+  const projects = [...byProject]
+    .filter(([, members]) => members.length > 1)
+    .map(([name, members]) => ({ name, services: groupServices(members).flatMap((group) => group.services) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const grouped = new Set(projects.flatMap((project) => project.services));
+  return { projects, rest: services.filter((service) => !grouped.has(service)) };
 }
 
 /** What the port chip shows and what gets copied for non-browsable ports. */
