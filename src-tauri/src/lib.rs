@@ -1,6 +1,11 @@
+mod autostart;
 mod detect;
+mod preview;
+mod tray;
 
-use detect::{classify, classify_image, docker_host_ports, protocol_for, url_host};
+use detect::{
+    classify, classify_image, compose_project, docker_host_ports, protocol_for, url_host,
+};
 use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState};
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
@@ -15,6 +20,8 @@ use std::{
 };
 use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind};
 use tauri::State;
+use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_window_state::StateFlags;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -63,6 +70,10 @@ struct Service {
     can_stop: bool,
     can_reveal: bool,
     hide_key: String,
+    /// Groups services that belong together: a Docker Compose project or the
+    /// folder a process runs from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -78,6 +89,12 @@ struct ScanResult {
 struct ActionResult {
     success: bool,
     message: String,
+    /// Identifies a known outcome so the interface can show it in the user's
+    /// language. `message` is the English fallback, e.g. for system errors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    count: Option<usize>,
 }
 
 impl ActionResult {
@@ -85,6 +102,8 @@ impl ActionResult {
         Self {
             success: true,
             message: message.into(),
+            code: None,
+            count: None,
         }
     }
 
@@ -92,7 +111,19 @@ impl ActionResult {
         Self {
             success: false,
             message: message.into(),
+            code: None,
+            count: None,
         }
+    }
+
+    fn code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    fn count(mut self, count: usize) -> Self {
+        self.count = Some(count);
+        self
     }
 }
 
@@ -106,11 +137,14 @@ struct DockerRow {
     image: String,
     #[serde(rename = "Ports")]
     ports: String,
+    #[serde(rename = "Labels", default)]
+    labels: String,
 }
 
 struct Container {
     info: DockerInfo,
     ports: Vec<u16>,
+    project: Option<String>,
 }
 
 fn quiet_command(program: &str) -> Command {
@@ -142,6 +176,7 @@ fn docker_containers(state: &AppState) -> Option<Vec<Container>> {
         .filter_map(|line| serde_json::from_str::<DockerRow>(line).ok())
         .map(|row| Container {
             ports: docker_host_ports(&row.ports),
+            project: compose_project(&row.labels),
             info: DockerInfo {
                 container_id: row.id,
                 name: row.names.split(',').next().unwrap_or_default().to_string(),
@@ -234,10 +269,15 @@ fn process_service(pid: u32, ports: &BTreeMap<u16, IpAddr>, system: &System) -> 
     let port_numbers: Vec<u16> = ports.keys().copied().collect();
     let classification = classify(&name, &args, &port_numbers);
     let cwd = process.and_then(|p| p.cwd());
+    let project = if classification.category == "emulator" {
+        None
+    } else {
+        detect::project_name(cwd, &args, detect::home_dir().as_deref())
+    };
     let display_name = if classification.category == "emulator" {
         detect::emulator_name(&args)
     } else {
-        detect::project_name(cwd, &args, detect::home_dir().as_deref())
+        project.clone()
     }
     .unwrap_or_else(|| match classification.framework.as_str() {
         "Other" | "Local server" | "Database" if process.is_some() => name.clone(),
@@ -260,6 +300,7 @@ fn process_service(pid: u32, ports: &BTreeMap<u16, IpAddr>, system: &System) -> 
         docker: None,
         can_stop: process.is_some(),
         can_reveal: cwd.is_some(),
+        project,
         name,
     }
 }
@@ -285,6 +326,7 @@ fn restricted_service(port: u16, address: IpAddr) -> Service {
         can_stop: false,
         can_reveal: false,
         hide_key: format!("port:{port}"),
+        project: None,
     }
 }
 
@@ -319,6 +361,7 @@ fn container_service(container: Container, listening: &BTreeMap<u16, IpAddr>) ->
         docker: Some(container.info),
         can_stop: true,
         can_reveal: false,
+        project: container.project,
     }
 }
 
@@ -407,7 +450,7 @@ fn plural(count: usize, word: &str) -> String {
 #[tauri::command(async)]
 fn stop_process_tree(pid: u32, state: State<AppState>) -> ActionResult {
     let Ok(mut system) = state.system.lock() else {
-        return ActionResult::fail("Process scanner unavailable");
+        return ActionResult::fail("Process scanner unavailable").code("scannerUnavailable");
     };
     system.refresh_processes(ProcessesToUpdate::All, true);
     let root = Pid::from_u32(pid);
@@ -425,21 +468,26 @@ fn stop_process_tree(pid: u32, state: State<AppState>) -> ActionResult {
         .count();
     if stopped > 0 {
         ActionResult::ok(format!("Stopped {}", plural(stopped, "process")))
+            .code("processesStopped")
+            .count(stopped)
     } else {
         ActionResult::fail("The process is no longer running or could not be stopped")
+            .code("stopFailed")
     }
 }
 
 #[tauri::command(async)]
 fn stop_container(container_id: String) -> ActionResult {
     if container_id.is_empty() || !container_id.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return ActionResult::fail("Invalid container ID");
+        return ActionResult::fail("Invalid container ID").code("invalidContainerId");
     }
     match quiet_command("docker")
         .args(["stop", &container_id])
         .output()
     {
-        Ok(output) if output.status.success() => ActionResult::ok("Container stopped"),
+        Ok(output) if output.status.success() => {
+            ActionResult::ok("Container stopped").code("containerStopped")
+        }
         Ok(output) => {
             ActionResult::fail(String::from_utf8_lossy(&output.stderr).trim().to_string())
         }
@@ -456,7 +504,7 @@ fn reveal_process_directory(pid: u32, state: State<AppState>) -> ActionResult {
             .map(Path::to_path_buf)
     });
     let Some(path) = path else {
-        return ActionResult::fail("Working directory is unavailable");
+        return ActionResult::fail("Working directory is unavailable").code("folderUnavailable");
     };
     match tauri_plugin_opener::open_path(&path, None::<&str>) {
         Ok(()) => ActionResult::ok(format!("Opened {}", path.display())),
@@ -467,12 +515,17 @@ fn reveal_process_directory(pid: u32, state: State<AppState>) -> ActionResult {
 #[tauri::command(async)]
 fn open_service(url: String) -> ActionResult {
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return ActionResult::fail("Only HTTP and HTTPS URLs can be opened");
+        return ActionResult::fail("Only HTTP and HTTPS URLs can be opened").code("unsupportedUrl");
     }
     match tauri_plugin_opener::open_url(&url, None::<&str>) {
         Ok(()) => ActionResult::ok(format!("Opened {url}")),
         Err(error) => ActionResult::fail(error.to_string()),
     }
+}
+
+#[tauri::command(async)]
+fn page_info(url: String) -> Result<preview::PageInfo, String> {
+    preview::fetch(&url)
 }
 
 #[cfg(test)]
@@ -503,9 +556,11 @@ mod tests {
                 image: "postgres:16".into(),
             },
             ports: vec![5432],
+            project: Some("shop".into()),
         };
         let service = container_service(container, &BTreeMap::new());
         assert_eq!(service.framework, "PostgreSQL");
+        assert_eq!(service.project.as_deref(), Some("shop"));
         assert_eq!(service.hide_key, "docker:local-postgres");
         assert!(service.ports[0].url.is_none());
     }
@@ -518,14 +573,37 @@ pub fn run() {
             system: Mutex::new(System::new()),
             docker_unavailable_until: Mutex::new(None),
         })
+        .manage(tray::CloseToTray::default())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            // The window starts hidden and is shown below, unless it should start in the tray.
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::all() - StateFlags::VISIBLE)
+                .build(),
+        )
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![autostart::MINIMIZED_ARG]),
+        ))
+        .setup(|app| {
+            tray::setup(app.handle());
+            if !(autostart::launched_minimized() && tray::available(app.handle())) {
+                tray::show_window(app.handle());
+            }
+            Ok(())
+        })
+        .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
             scan_services,
             stop_process_tree,
             stop_container,
             reveal_process_directory,
-            open_service
+            open_service,
+            page_info,
+            tray::update_tray,
+            tray::set_close_to_tray,
+            autostart::launch_at_login,
+            autostart::set_launch_at_login
         ])
         .run(tauri::generate_context!())
         .expect("error while running Devtop");

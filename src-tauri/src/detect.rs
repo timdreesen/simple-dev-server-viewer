@@ -466,6 +466,29 @@ pub fn project_name(cwd: Option<&Path>, args: &[String], home: Option<&Path>) ->
         .map(|name| name.to_string_lossy().into_owned())
 }
 
+/// The project of a Docker Compose container (Supabase CLI containers carry the
+/// same labels), from `docker ps` labels such as
+/// `com.docker.compose.project=shop,com.docker.compose.project.working_dir=/home/me/shop`.
+/// The folder name is preferred so containers group with dev servers started
+/// from the same folder.
+pub fn compose_project(labels: &str) -> Option<String> {
+    let label = |key: &str| {
+        labels
+            .split(',')
+            .find_map(|label| label.strip_prefix(key)?.strip_prefix('='))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    label("com.docker.compose.project.working_dir")
+        .and_then(|dir| {
+            dir.replace('\\', "/")
+                .rsplit('/')
+                .find(|part| !part.is_empty())
+                .map(String::from)
+        })
+        .or_else(|| label("com.docker.compose.project").map(String::from))
+}
+
 /// The virtual device name of an Android emulator (`-avd Pixel_8_API_35`).
 pub fn emulator_name(args: &[String]) -> Option<String> {
     args.iter()
@@ -487,6 +510,25 @@ pub fn home_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_compose_projects() {
+        assert_eq!(
+            compose_project("com.docker.compose.project=shop,com.docker.compose.project.working_dir=/home/me/shop_b2b,com.docker.compose.service=db").as_deref(),
+            Some("shop_b2b")
+        );
+        assert_eq!(
+            compose_project("com.docker.compose.project.working_dir=C:\\code\\shop\\").as_deref(),
+            Some("shop")
+        );
+        assert_eq!(
+            compose_project("com.supabase.cli.project=app,com.docker.compose.project=app")
+                .as_deref(),
+            Some("app")
+        );
+        assert_eq!(compose_project("maintainer=someone"), None);
+        assert_eq!(compose_project(""), None);
+    }
 
     fn args(command: &str) -> Vec<String> {
         command.split_whitespace().map(str::to_string).collect()

@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setLocale } from "./i18n";
 import {
+  groupByProject,
   groupServices,
   parseHiddenKeys,
   portAddress,
   sectionServices,
   serializeHiddenKeys,
   serviceDetail,
+  serviceName,
+  typeOptions,
   type Service,
 } from "./services";
 
@@ -27,6 +31,8 @@ const service = (overrides: Partial<Service>): Service => ({
   hideKey: "process:node",
   ...overrides,
 });
+
+beforeEach(() => setLocale("en"));
 
 describe("hidden key persistence", () => {
   it("serializes, restores, and tolerates invalid storage", () => {
@@ -102,5 +108,62 @@ describe("groupServices", () => {
       ["Databases", ["db"]],
       ["Emulators", ["Pixel 8"]],
     ]);
+  });
+});
+
+describe("serviceName", () => {
+  it("translates names the scanner made up", () => {
+    const restricted = service({
+      id: "port:5432",
+      pid: undefined,
+      displayName: "Port 5432",
+      framework: "Database",
+      ports: [{ port: 5432, address: "localhost" }],
+    });
+    setLocale("pt-BR");
+    expect(serviceName(restricted)).toBe("Porta 5432");
+    expect(serviceName(service({ displayName: "Local server" }))).toBe("Servidor local");
+    expect(serviceDetail(service({ framework: "Database" }))).toBe("Banco de dados");
+    expect(serviceName(service({ displayName: "my-app" }))).toBe("my-app");
+  });
+});
+
+describe("types", () => {
+  const services = [
+    service({ id: "a", framework: "Vite" }),
+    service({ id: "b", framework: "Docker", category: "container" }),
+    service({ id: "c", framework: "Vite" }),
+    service({ id: "d", framework: "Other", isLikelyDev: false }),
+  ];
+
+  it("lists types by count, keeping selected types that are gone", () => {
+    expect(typeOptions(services, new Set(["Redis"])).map((option) => [option.label, option.count])).toEqual([
+      ["Vite", 2],
+      ["Docker", 1],
+      ["Other", 1],
+      ["Redis", 0],
+    ]);
+  });
+
+  it("filters sections by type", () => {
+    const sections = sectionServices(services, new Set(), "", new Set(["Vite", "Other"]));
+    expect(sections.servers.map((item) => item.id)).toEqual(["a", "c"]);
+    expect(sections.others.map((item) => item.id)).toEqual(["d"]);
+  });
+});
+
+describe("groupByProject", () => {
+  it("groups projects with several services and leaves the rest in order", () => {
+    const { projects, rest } = groupByProject([
+      service({ id: "1", project: "shop" }),
+      service({ id: "2", project: "blog" }),
+      service({ id: "3", project: "shop", category: "database" }),
+      service({ id: "4" }),
+      service({ id: "5", project: "shop", category: "container" }),
+    ]);
+    expect(projects.map((project) => [project.name, project.services.map((item) => item.id)])).toEqual([
+      ["shop", ["1", "5", "3"]],
+    ]);
+    expect(rest.map((item) => item.id)).toEqual(["2", "4"]);
   });
 });

@@ -9,11 +9,14 @@ AI coding agents are pretty good at starting test servers. They are not always a
 - Finds running dev servers, databases, Docker containers, and Android emulators, grouped in one list.
 - Click a port to open it in your browser (or copy it, for databases).
 - Click a row to see the full command, folder, PID, and resource use.
+- Shows web services with their favicon and page title, plus a live thumbnail when you open a row (can be turned off).
 - Stop a server (process tree or Docker container) with two clicks, open its folder, or hide it.
-- Shows likely dev services by default, with a toggle for other processes listening on ports.
+- Shows likely dev services by default; other processes listening on ports can be turned on in the settings.
+- Lives in the system tray, with each service's ports and stop button in its menu. It can start at login, and the settings choose whether closing the window keeps it in the tray or quits.
 - Follows your system's light or dark theme. Press `/` or `Ctrl+F` to filter.
+- Speaks your system's language, or the one you pick in the settings: English and Brazilian Portuguese so far.
 - Runs on Windows 10/11, macOS, and Linux.
-- Has no accounts, telemetry, cloud services, or background process.
+- Has no accounts, telemetry, or cloud services.
 
 ## Run It Yourself
 
@@ -54,9 +57,18 @@ The Rust backend scans listening ports, matches them to running processes, and s
 
 - `src-tauri/src/detect.rs`: service detection rules (pure, unit tested)
 - `src-tauri/src/lib.rs`: port scanner, Docker integration, and process controls
+- `src-tauri/src/preview.rs`: reads page titles and favicons, from local addresses only
+- `src-tauri/src/tray.rs` and `src/tray.ts`: the system tray icon and its menu
+- `src-tauri/src/autostart.rs`: starting at login
 - `src/App.tsx`: app behavior and interface
 - `src/services.ts`: list sections, filtering, and hidden services
+- `src/i18n.ts` and `src/locales/`: translations
+- `src/SettingsMenu.tsx` and `src/settings.ts`: the settings menu
 - `src/App.css`: styling
+
+## Translations
+
+The app picks the first supported language from your system settings and falls back to English. The settings button in the bottom-left corner overrides it. To add a language, copy `src/locales/pt-BR.ts`, translate every string (keep the `{placeholders}`), and register it in `src/i18n.ts` (including its name in `localeNames`). TypeScript reports any missing string.
 
 ## Downloads
 

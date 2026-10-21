@@ -1,3 +1,5 @@
+import { t, type MessageKey } from "./i18n";
+
 export type Category = "web" | "database" | "container" | "runtime" | "emulator" | "unknown";
 
 export interface PortInfo {
@@ -30,6 +32,14 @@ export interface Service {
   canStop: boolean;
   canReveal: boolean;
   hideKey: string;
+  /** Docker Compose project or the folder a process runs from. */
+  project?: string;
+}
+
+/** Title and icon read from a web service's page; both empty when it isn't HTML. */
+export interface PageInfo {
+  title?: string;
+  favicon?: string;
 }
 
 export interface ScanResult {
@@ -70,10 +80,12 @@ export function matchesQuery(service: Service, query: string): boolean {
   if (!search) return true;
   return [
     service.displayName,
+    serviceName(service),
     service.name,
     service.framework,
     service.command,
     service.workingDirectory,
+    service.project,
     service.docker?.image,
     service.pid,
     ...service.ports.map((port) => port.port),
@@ -83,10 +95,16 @@ export function matchesQuery(service: Service, query: string): boolean {
     .includes(search);
 }
 
-export function sectionServices(services: Service[], hiddenKeys: Set<string>, query: string): Sections {
+export function sectionServices(
+  services: Service[],
+  hiddenKeys: Set<string>,
+  query: string,
+  types: Set<string> = new Set(),
+): Sections {
   const sections: Sections = { servers: [], others: [], hidden: [] };
   for (const service of services) {
     if (!matchesQuery(service, query)) continue;
+    if (types.size > 0 && !types.has(serviceType(service))) continue;
     if (hiddenKeys.has(service.hideKey)) sections.hidden.push(service);
     else if (service.isLikelyDev) sections.servers.push(service);
     else sections.others.push(service);
@@ -99,19 +117,73 @@ export interface Group {
   services: Service[];
 }
 
-const groupTitles = ["Servers", "Databases", "Emulators"] as const;
+const groupKeys = ["servers", "databases", "emulators"] as const;
 
-function groupTitle(service: Service): (typeof groupTitles)[number] {
-  if (service.category === "database") return "Databases";
-  if (service.category === "emulator") return "Emulators";
-  return "Servers";
+function groupKey(service: Service): (typeof groupKeys)[number] {
+  if (service.category === "database") return "databases";
+  if (service.category === "emulator") return "emulators";
+  return "servers";
 }
 
 /** Splits the main list by kind, keeping the scan order inside each group. */
 export function groupServices(services: Service[]): Group[] {
-  return groupTitles
-    .map((title) => ({ title, services: services.filter((service) => groupTitle(service) === title) }))
+  return groupKeys
+    .map((key) => ({ title: t(key), services: services.filter((service) => groupKey(service) === key) }))
     .filter((group) => group.services.length > 0);
+}
+
+/** What the scanner recognized a service as (Vite, PostgreSQL, Docker, ...), used by the type filter. */
+export const serviceType = (service: Service) => service.framework;
+
+export function typeLabel(type: string): string {
+  return type === "Other" ? t("otherType") : frameworkLabel(type);
+}
+
+export interface TypeOption {
+  type: string;
+  label: string;
+  /** Category of the first service of this type, for its icon. */
+  category: Category;
+  count: number;
+}
+
+/** The types among the given services, most common first. Selected types stay listed even when nothing matches. */
+export function typeOptions(services: Service[], selected: Set<string>): TypeOption[] {
+  const options = new Map<string, TypeOption>();
+  for (const service of services) {
+    const type = serviceType(service);
+    const option = options.get(type) ?? { type, label: typeLabel(type), category: service.category, count: 0 };
+    option.count += 1;
+    options.set(type, option);
+  }
+  for (const type of selected) {
+    if (!options.has(type)) options.set(type, { type, label: typeLabel(type), category: "unknown", count: 0 });
+  }
+  return [...options.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+/** The page a web service serves, used for its title, favicon, and thumbnail. */
+export function previewUrl(service: Service): string | undefined {
+  return service.ports.find((port) => port.url)?.url;
+}
+
+export interface ProjectGroup {
+  name: string;
+  services: Service[];
+}
+
+/** Projects with more than one service, by name, and everything else in scan order. */
+export function groupByProject(services: Service[]): { projects: ProjectGroup[]; rest: Service[] } {
+  const byProject = new Map<string, Service[]>();
+  for (const service of services) {
+    if (service.project) byProject.set(service.project, [...(byProject.get(service.project) ?? []), service]);
+  }
+  const projects = [...byProject]
+    .filter(([, members]) => members.length > 1)
+    .map(([name, members]) => ({ name, services: groupServices(members).flatMap((group) => group.services) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const grouped = new Set(projects.flatMap((project) => project.services));
+  return { projects, rest: services.filter((service) => !grouped.has(service)) };
 }
 
 /** What the port chip shows and what gets copied for non-browsable ports. */
@@ -119,8 +191,23 @@ export function portAddress(port: PortInfo): string {
   return `${port.address}:${port.port}`;
 }
 
+/** Generic labels the scanner uses when it can't tell what a service is. */
+const genericLabels: Record<string, MessageKey> = { "Local server": "localServer", Database: "database" };
+
+export function frameworkLabel(framework: string): string {
+  const key = genericLabels[framework];
+  return key ? t(key) : framework;
+}
+
+/** The display name in the user's language; services the scanner can't inspect are named after their port. */
+export function serviceName(service: Service): string {
+  if (service.id.startsWith("port:") && service.ports.length > 0) return t("port", { port: service.ports[0].port });
+  return frameworkLabel(service.displayName);
+}
+
 export function serviceDetail(service: Service): string {
-  if (service.docker) return service.framework === "Docker" ? service.docker.image : `${service.framework} · Docker`;
-  if (service.pid === undefined) return "Owned by another user";
-  return service.framework === "Other" ? service.name : service.framework;
+  const framework = frameworkLabel(service.framework);
+  if (service.docker) return service.framework === "Docker" ? service.docker.image : `${framework} · Docker`;
+  if (service.pid === undefined) return t("ownedByAnotherUser");
+  return service.framework === "Other" ? service.name : framework;
 }
