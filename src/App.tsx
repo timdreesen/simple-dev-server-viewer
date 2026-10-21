@@ -1,5 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Box, Database, Eye, EyeOff, FolderOpen, Globe, Search, Server, Smartphone, Square, TerminalSquare, X } from "lucide-react";
+import {
+  Box,
+  Database,
+  Eye,
+  EyeOff,
+  FolderOpen,
+  Globe,
+  Image,
+  Layers,
+  Search,
+  Server,
+  Smartphone,
+  Square,
+  TerminalSquare,
+  X,
+} from "lucide-react";
 import type { SimpleIcon } from "simple-icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import "./App.css";
@@ -301,20 +316,33 @@ function App() {
         <span className={`live ${error ? "offline" : ""}`} title={error || t("liveTitle")}>
           <i aria-hidden /> {error ? t("scanFailed") : t("live")}
         </span>
-        <label className="checkbox">
-          <input type="checkbox" checked={showOthers} onChange={(event) => setShowOthers(event.target.checked)} />
-          {t("showOtherProcesses")}{scan ? ` (${sections.others.length})` : ""}
-        </label>
-        {sections.hidden.length > 0 && (
-          <label className="checkbox">
-            <input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} />
-            {t("showHidden")} ({sections.hidden.length})
-          </label>
-        )}
-        <label className="checkbox" title={t("showPreviewsTitle")}>
-          <input type="checkbox" checked={showPreviews} onChange={(event) => setShowPreviews(event.target.checked)} />
-          {t("showPreviews")}
-        </label>
+        <div className="filters">
+          <FilterToggle
+            icon={Layers}
+            label={t("otherProcessesFilter")}
+            title={t("showOtherProcesses")}
+            count={scan ? sections.others.length : undefined}
+            pressed={showOthers}
+            onChange={setShowOthers}
+          />
+          {sections.hidden.length > 0 && (
+            <FilterToggle
+              icon={EyeOff}
+              label={t("hidden")}
+              title={t("showHidden")}
+              count={sections.hidden.length}
+              pressed={showHidden}
+              onChange={setShowHidden}
+            />
+          )}
+          <FilterToggle
+            icon={Image}
+            label={t("previewsFilter")}
+            title={t("showPreviewsTitle")}
+            pressed={showPreviews}
+            onChange={setShowPreviews}
+          />
+        </div>
         {scan && !scan.dockerAvailable && (
           <span className="muted push" title={t("dockerNotDetectedTitle")}>
             {t("dockerNotDetected")}
@@ -328,6 +356,36 @@ function App() {
         </div>
       )}
     </div>
+  );
+}
+
+function FilterToggle({
+  icon: Icon,
+  label,
+  title,
+  count,
+  pressed,
+  onChange,
+}: {
+  icon: typeof Server;
+  label: string;
+  title: string;
+  count?: number;
+  pressed: boolean;
+  onChange: (pressed: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="filter-toggle"
+      aria-pressed={pressed}
+      title={title}
+      onClick={() => onChange(!pressed)}
+    >
+      <Icon size={13} aria-hidden />
+      {label}
+      {count !== undefined && <span className="filter-count">{count}</span>}
+    </button>
   );
 }
 
