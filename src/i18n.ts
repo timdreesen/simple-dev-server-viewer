@@ -20,7 +20,32 @@ export function detectLocale(languages: readonly string[]): Locale {
   return "en";
 }
 
-let current: Locale = detectLocale(globalThis.navigator?.languages ?? []);
+/** The user's choice in the settings: a locale, or "auto" to follow the system. */
+export type LanguagePreference = Locale | "auto";
+
+export const LANGUAGE_STORAGE_KEY = "language";
+export const supportedLocales = Object.keys(locales) as Locale[];
+
+/** Each language's name in its own language, so it is recognizable whatever the current locale. */
+export const localeNames: Record<Locale, string> = { en: "English", "pt-BR": "Português (Brasil)" };
+
+export function parseLanguagePreference(value: string | null): LanguagePreference {
+  return supportedLocales.find((locale) => locale === value) ?? "auto";
+}
+
+export function resolveLocale(preference: LanguagePreference): Locale {
+  return preference === "auto" ? detectLocale(globalThis.navigator?.languages ?? []) : preference;
+}
+
+function storedPreference(): LanguagePreference {
+  try {
+    return parseLanguagePreference(globalThis.localStorage?.getItem(LANGUAGE_STORAGE_KEY) ?? null);
+  } catch {
+    return "auto";
+  }
+}
+
+let current: Locale = resolveLocale(storedPreference());
 
 export const getLocale = () => current;
 

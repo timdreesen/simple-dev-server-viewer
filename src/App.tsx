@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   Box,
   ChevronRight,
@@ -9,9 +10,7 @@ import {
   FolderOpen,
   Globe,
   FolderTree,
-  Image,
   LayoutGrid,
-  Layers,
   List,
   Search,
   Server,
@@ -24,8 +23,18 @@ import type { SimpleIcon } from "simple-icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import "./App.css";
 import { formatBytes, formatUptime } from "./format";
-import { t, type MessageKey } from "./i18n";
+import {
+  getLocale,
+  LANGUAGE_STORAGE_KEY,
+  parseLanguagePreference,
+  resolveLocale,
+  setLocale,
+  t,
+  type LanguagePreference,
+  type MessageKey,
+} from "./i18n";
 import { frameworkIcon } from "./icons";
+import { trayMenu } from "./tray";
 import {
   groupByProject,
   groupServices,
@@ -47,6 +56,8 @@ import {
   type Service,
   type TypeOption,
 } from "./services";
+import { HIDDEN_SCAN_INTERVAL_MS, parseCloseAction, parseScanInterval } from "./settings";
+import { formatSeconds, SettingsMenu, type SettingsValues } from "./SettingsMenu";
 import { TypeFilter } from "./TypeFilter";
 
 interface ActionResult {
@@ -73,7 +84,6 @@ interface Actions {
 
 type ViewMode = "list" | "cards";
 
-const SCAN_INTERVAL_MS = 2000;
 const MAX_VISIBLE_PORTS = 3;
 
 /** Pages are read once per process and URL, so a restarted server is read again. */
@@ -107,6 +117,10 @@ function App() {
   const [viewMode, setViewMode] = useState<ViewMode>(() =>
     localStorage.getItem("viewMode") === "cards" ? "cards" : "list",
   );
+  const [language, setLanguage] = useState(() => parseLanguagePreference(localStorage.getItem(LANGUAGE_STORAGE_KEY)));
+  const [launchAtLogin, setLaunchAtLogin] = useState<boolean | null>(null);
+  const [closeAction, setCloseAction] = useState(() => parseCloseAction(localStorage.getItem("closeAction")));
+  const [scanInterval, setScanInterval] = useState(() => parseScanInterval(localStorage.getItem("scanInterval")));
   const [pages, setPages] = useState<Record<string, PageInfo>>({});
   const requestedPages = useRef(new Set<string>());
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -114,11 +128,15 @@ function App() {
   const [toast, setToast] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const scanning = useRef(false);
+  const lastScan = useRef(0);
+  const scanRef = useRef<ScanResult | null>(null);
+  const lastTrayMenu = useRef("");
   const toastTimer = useRef<number>(undefined);
 
   const refresh = useCallback(async () => {
     if (scanning.current) return;
     scanning.current = true;
+    lastScan.current = Date.now();
     try {
       setScan(await invoke<ScanResult>("scan_services"));
       setError("");
@@ -129,19 +147,21 @@ function App() {
     }
   }, []);
 
-  // Scan continuously, but only while the window is visible.
+  // Scan continuously, and less often while the window is hidden; slower scans keep the tray menu current.
   useEffect(() => {
     refresh();
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") refresh();
-    }, SCAN_INTERVAL_MS);
+      const visible = document.visibilityState === "visible";
+      const interval = visible ? scanInterval : Math.max(scanInterval, HIDDEN_SCAN_INTERVAL_MS);
+      if (Date.now() - lastScan.current >= interval - scanInterval / 2) refresh();
+    }, scanInterval);
     const onVisible = () => document.visibilityState === "visible" && refresh();
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh]);
+  }, [refresh, scanInterval]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -164,6 +184,14 @@ function App() {
   }, [hiddenKeys]);
   useEffect(() => localStorage.setItem("showOthers", String(showOthers)), [showOthers]);
   useEffect(() => localStorage.setItem("showPreviews", String(showPreviews)), [showPreviews]);
+  useEffect(() => localStorage.setItem("scanInterval", String(scanInterval)), [scanInterval]);
+  useEffect(() => {
+    localStorage.setItem("closeAction", closeAction);
+    invoke("set_close_to_tray", { enabled: closeAction === "tray" }).catch(() => {});
+  }, [closeAction]);
+  useEffect(() => {
+    invoke<boolean>("launch_at_login").then(setLaunchAtLogin, () => setLaunchAtLogin(null));
+  }, []);
   useEffect(() => localStorage.setItem("groupProjects", String(groupProjects)), [groupProjects]);
   useEffect(
     () => localStorage.setItem("collapsedProjects", serializeHiddenKeys(collapsedProjects)),
@@ -191,7 +219,7 @@ function App() {
     const all = sectionServices(scan?.services ?? [], hiddenKeys, "");
     const listed = [...all.servers, ...(showOthers ? all.others : []), ...(showHidden ? all.hidden : [])];
     return typeOptions(listed, types);
-  }, [scan, hiddenKeys, showOthers, showHidden, types]);
+  }, [scan, hiddenKeys, showOthers, showHidden, types, language]);
 
   // Read the title and favicon of web services as they appear in the list.
   useEffect(() => {
@@ -213,6 +241,28 @@ function App() {
       );
     }
   }, [sections, showOthers, showHidden, showPreviews]);
+
+  const settings: SettingsValues = { language, launchAtLogin, closeAction, scanInterval, showPreviews, showOthers };
+
+  const changeSettings = (changes: Partial<SettingsValues>) => {
+    if (changes.language) changeLanguage(changes.language);
+    if (changes.closeAction) setCloseAction(changes.closeAction);
+    if (changes.scanInterval) setScanInterval(changes.scanInterval);
+    if (changes.showPreviews !== undefined) setShowPreviews(changes.showPreviews);
+    if (changes.showOthers !== undefined) setShowOthers(changes.showOthers);
+    if (changes.launchAtLogin != null) {
+      invoke<boolean>("set_launch_at_login", { enabled: changes.launchAtLogin }).then(setLaunchAtLogin, (reason) =>
+        notify(String(reason)),
+      );
+    }
+  };
+
+  const changeLanguage = (preference: LanguagePreference) => {
+    setLocale(resolveLocale(preference));
+    document.documentElement.lang = getLocale();
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, preference);
+    setLanguage(preference);
+  };
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -278,6 +328,36 @@ function App() {
       },
     };
   }, [notify, refresh]);
+
+  useEffect(() => {
+    scanRef.current = scan;
+  }, [scan]);
+
+  // Keep the tray menu in sync with the main list; it is only rebuilt when it changes.
+  useEffect(() => {
+    if (!scan) return;
+    const menu = trayMenu(sectionServices(scan.services, hiddenKeys, "").servers, groupProjects);
+    const serialized = JSON.stringify(menu);
+    if (serialized === lastTrayMenu.current) return;
+    lastTrayMenu.current = serialized;
+    invoke("update_tray", { menu }).catch(() => {});
+  }, [scan, hiddenKeys, groupProjects, language]);
+
+  // Stop actions chosen in the tray menu.
+  useEffect(() => {
+    const unlisten = listen<string>("tray-action", ({ payload }) => {
+      const services = scanRef.current?.services ?? [];
+      if (payload.startsWith("stop-project:")) {
+        const name = payload.slice("stop-project:".length);
+        const members = services.filter((service) => service.project === name);
+        if (members.length > 0) actions.stopProject({ name, services: members });
+      } else if (payload.startsWith("stop:")) {
+        const service = services.find((item) => item.id === payload.slice("stop:".length));
+        if (service) actions.stop(service);
+      }
+    });
+    return () => void unlisten.then((stop) => stop());
+  }, [actions]);
 
   const pageFor = (service: Service) => {
     const url = previewUrl(service);
@@ -432,8 +512,17 @@ function App() {
       </main>
 
       <footer className="statusbar">
-        <span className={`live ${error ? "offline" : ""}`} title={error || t("liveTitle")}>
+        <SettingsMenu
+          values={settings}
+          othersCount={scan ? sections.others.length : undefined}
+          onChange={changeSettings}
+        />
+        <span
+          className={`live ${error ? "offline" : ""}`}
+          title={error || t("liveTitle", { interval: formatSeconds(scanInterval) })}
+        >
           <i aria-hidden /> {error ? t("scanFailed") : t("live")}
+          {!error && <span className="live-interval">{formatSeconds(scanInterval)}</span>}
         </span>
         <div className="filters">
           <FilterToggle
@@ -442,14 +531,6 @@ function App() {
             title={t("projectsFilterTitle")}
             pressed={groupProjects}
             onChange={setGroupProjects}
-          />
-          <FilterToggle
-            icon={Layers}
-            label={t("otherProcessesFilter")}
-            title={t("showOtherProcesses")}
-            count={scan ? sections.others.length : undefined}
-            pressed={showOthers}
-            onChange={setShowOthers}
           />
           {sections.hidden.length > 0 && (
             <FilterToggle
@@ -461,13 +542,6 @@ function App() {
               onChange={setShowHidden}
             />
           )}
-          <FilterToggle
-            icon={Image}
-            label={t("previewsFilter")}
-            title={t("showPreviewsTitle")}
-            pressed={showPreviews}
-            onChange={setShowPreviews}
-          />
         </div>
         {scan && !scan.dockerAvailable && (
           <span className="muted push" title={t("dockerNotDetectedTitle")}>

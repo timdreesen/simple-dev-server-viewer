@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { detectLocale, setLocale, t } from "./i18n";
+import { detectLocale, parseLanguagePreference, setLocale, t } from "./i18n";
 import { en } from "./locales/en";
 import { ptBR } from "./locales/pt-BR";
 
@@ -13,6 +13,16 @@ describe("detectLocale", () => {
     expect(detectLocale(["de-DE", "en-GB"])).toBe("en");
     expect(detectLocale(["fr"])).toBe("en");
     expect(detectLocale([])).toBe("en");
+  });
+});
+
+describe("parseLanguagePreference", () => {
+  it("accepts supported locales and falls back to following the system", () => {
+    expect(parseLanguagePreference("pt-BR")).toBe("pt-BR");
+    expect(parseLanguagePreference("en")).toBe("en");
+    expect(parseLanguagePreference("auto")).toBe("auto");
+    expect(parseLanguagePreference("de")).toBe("auto");
+    expect(parseLanguagePreference(null)).toBe("auto");
   });
 });
 

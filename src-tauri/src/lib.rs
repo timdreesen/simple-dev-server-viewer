@@ -1,5 +1,7 @@
+mod autostart;
 mod detect;
 mod preview;
+mod tray;
 
 use detect::{
     classify, classify_image, compose_project, docker_host_ports, protocol_for, url_host,
@@ -18,6 +20,8 @@ use std::{
 };
 use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind};
 use tauri::State;
+use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_window_state::StateFlags;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -569,15 +573,37 @@ pub fn run() {
             system: Mutex::new(System::new()),
             docker_unavailable_until: Mutex::new(None),
         })
+        .manage(tray::CloseToTray::default())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            // The window starts hidden and is shown below, unless it should start in the tray.
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::all() - StateFlags::VISIBLE)
+                .build(),
+        )
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![autostart::MINIMIZED_ARG]),
+        ))
+        .setup(|app| {
+            tray::setup(app.handle());
+            if !(autostart::launched_minimized() && tray::available(app.handle())) {
+                tray::show_window(app.handle());
+            }
+            Ok(())
+        })
+        .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
             scan_services,
             stop_process_tree,
             stop_container,
             reveal_process_directory,
             open_service,
-            page_info
+            page_info,
+            tray::update_tray,
+            tray::set_close_to_tray,
+            autostart::launch_at_login,
+            autostart::set_launch_at_login
         ])
         .run(tauri::generate_context!())
         .expect("error while running Devtop");
