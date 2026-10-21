@@ -1,4 +1,5 @@
 mod detect;
+mod preview;
 
 use detect::{classify, classify_image, docker_host_ports, protocol_for, url_host};
 use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState};
@@ -500,6 +501,11 @@ fn open_service(url: String) -> ActionResult {
     }
 }
 
+#[tauri::command(async)]
+fn page_info(url: String) -> Result<preview::PageInfo, String> {
+    preview::fetch(&url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,7 +556,8 @@ pub fn run() {
             stop_process_tree,
             stop_container,
             reveal_process_directory,
-            open_service
+            open_service,
+            page_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running Devtop");

@@ -12,11 +12,13 @@ import {
   LEGACY_HIDDEN_STORAGE_KEY,
   parseHiddenKeys,
   portAddress,
+  previewUrl,
   sectionServices,
   serializeHiddenKeys,
   serviceDetail,
   serviceName,
   type Category,
+  type PageInfo,
   type PortInfo,
   type ScanResult,
   type Service,
@@ -46,6 +48,9 @@ interface Actions {
 const SCAN_INTERVAL_MS = 2000;
 const MAX_VISIBLE_PORTS = 3;
 
+/** Pages are read once per process and URL, so a restarted server is read again. */
+const pageKey = (service: Service, url: string) => `${service.id} ${url}`;
+
 const categoryIcons: Record<Category, typeof Server> = {
   web: Globe,
   database: Database,
@@ -64,6 +69,9 @@ function App() {
   );
   const [showOthers, setShowOthers] = useState(() => localStorage.getItem("showOthers") === "true");
   const [showHidden, setShowHidden] = useState(false);
+  const [showPreviews, setShowPreviews] = useState(() => localStorage.getItem("showPreviews") !== "false");
+  const [pages, setPages] = useState<Record<string, PageInfo>>({});
+  const requestedPages = useRef(new Set<string>());
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState("");
@@ -118,6 +126,7 @@ function App() {
     localStorage.removeItem(LEGACY_HIDDEN_STORAGE_KEY);
   }, [hiddenKeys]);
   useEffect(() => localStorage.setItem("showOthers", String(showOthers)), [showOthers]);
+  useEffect(() => localStorage.setItem("showPreviews", String(showPreviews)), [showPreviews]);
 
   // Forget "stopping" markers once the service is gone from the scan.
   useEffect(() => {
@@ -133,6 +142,27 @@ function App() {
     () => sectionServices(scan?.services ?? [], hiddenKeys, query),
     [scan, hiddenKeys, query],
   );
+
+  // Read the title and favicon of web services as they appear in the list.
+  useEffect(() => {
+    if (!showPreviews) return;
+    const visible = [
+      ...sections.servers,
+      ...(showOthers ? sections.others : []),
+      ...(showHidden ? sections.hidden : []),
+    ];
+    for (const service of visible) {
+      const url = previewUrl(service);
+      if (!url) continue;
+      const key = pageKey(service, url);
+      if (requestedPages.current.has(key)) continue;
+      requestedPages.current.add(key);
+      invoke<PageInfo>("page_info", { url }).then(
+        (page) => setPages((current) => ({ ...current, [key]: page })),
+        () => {},
+      );
+    }
+  }, [sections, showOthers, showHidden, showPreviews]);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -187,6 +217,11 @@ function App() {
     };
   }, [notify, refresh]);
 
+  const pageFor = (service: Service) => {
+    const url = previewUrl(service);
+    return url ? pages[pageKey(service, url)] : undefined;
+  };
+
   const renderList = (services: Service[], hidden = false) => (
     <ul className="service-list">
       {services.map((service) => (
@@ -195,6 +230,7 @@ function App() {
           service={service}
           hidden={hidden}
           stopping={stoppingIds.has(service.id)}
+          page={showPreviews ? pageFor(service) : undefined}
           expanded={expandedId === service.id}
           onToggle={() => setExpandedId((current) => (current === service.id ? null : service.id))}
           actions={actions}
@@ -275,6 +311,10 @@ function App() {
             {t("showHidden")} ({sections.hidden.length})
           </label>
         )}
+        <label className="checkbox" title={t("showPreviewsTitle")}>
+          <input type="checkbox" checked={showPreviews} onChange={(event) => setShowPreviews(event.target.checked)} />
+          {t("showPreviews")}
+        </label>
         {scan && !scan.dockerAvailable && (
           <span className="muted push" title={t("dockerNotDetectedTitle")}>
             {t("dockerNotDetected")}
@@ -304,6 +344,7 @@ function ServiceRow({
   service,
   hidden,
   stopping,
+  page,
   expanded,
   onToggle,
   actions,
@@ -311,6 +352,7 @@ function ServiceRow({
   service: Service;
   hidden: boolean;
   stopping: boolean;
+  page?: PageInfo;
   expanded: boolean;
   onToggle: () => void;
   actions: Actions;
@@ -321,6 +363,9 @@ function ServiceRow({
     service.memoryBytes > 0 && formatBytes(service.memoryBytes),
   ].filter(Boolean);
   const extraPorts = service.ports.length - MAX_VISIBLE_PORTS;
+  const name = serviceName(service);
+  const pageTitle = page?.title && page.title.toLowerCase() !== name.toLowerCase() ? page.title : undefined;
+  const thumbnailUrl = page?.title || page?.favicon ? previewUrl(service) : undefined;
 
   return (
     <li className={`service ${expanded ? "expanded" : ""} ${stopping ? "stopping" : ""}`}>
@@ -337,9 +382,12 @@ function ServiceRow({
           }
         }}
       >
-        <ServiceIcon service={service} />
+        <ServiceIcon service={service} favicon={page?.favicon} />
         <div className="service-title">
-          <span className="service-name">{serviceName(service)}</span>
+          <span className="service-name">
+            {name}
+            {pageTitle && <span className="page-title"> · {pageTitle}</span>}
+          </span>
           <span className="service-meta">{stopping ? t("stopping") : meta.join(" · ")}</span>
         </div>
         <div className="ports">
@@ -360,7 +408,15 @@ function ServiceRow({
           {service.canStop && <StopButton disabled={stopping} onConfirm={() => actions.stop(service)} />}
         </div>
       </div>
-      {expanded && <ServiceDetails service={service} actions={actions} />}
+      {expanded &&
+        (thumbnailUrl ? (
+          <div className="expanded-body">
+            <Thumbnail url={thumbnailUrl} name={name} actions={actions} />
+            <ServiceDetails service={service} actions={actions} />
+          </div>
+        ) : (
+          <ServiceDetails service={service} actions={actions} />
+        ))}
     </li>
   );
 }
@@ -477,10 +533,41 @@ function ServiceDetails({ service, actions }: { service: Service; actions: Actio
   );
 }
 
-function ServiceIcon({ service }: { service: Service }) {
+/** A scaled-down live view of the page. Sandboxed so it can't navigate the app window. */
+function Thumbnail({ url, name, actions }: { url: string; name: string; actions: Actions }) {
+  return (
+    <div className="thumbnail">
+      <iframe
+        src={url}
+        title={t("pagePreview", { name })}
+        sandbox="allow-scripts allow-same-origin allow-forms"
+        loading="lazy"
+        tabIndex={-1}
+      />
+      <button
+        className="thumbnail-open"
+        onClick={() => actions.open(url)}
+        aria-label={t("openUrl", { url })}
+        title={t("openUrl", { url })}
+      />
+    </div>
+  );
+}
+
+function ServiceIcon({ service, favicon }: { service: Service; favicon?: string }) {
+  const [failedFavicon, setFailedFavicon] = useState<string>();
   const brand = frameworkIcon(service.framework);
   const Fallback = categoryIcons[service.category] ?? Server;
-  return <div className="service-icon">{brand ? <BrandIcon icon={brand} /> : <Fallback size={16} />}</div>;
+  const fallback = brand ? <BrandIcon icon={brand} /> : <Fallback size={16} />;
+  return (
+    <div className="service-icon">
+      {favicon && favicon !== failedFavicon ? (
+        <img className="favicon" src={favicon} alt="" onError={() => setFailedFavicon(favicon)} />
+      ) : (
+        fallback
+      )}
+    </div>
+  );
 }
 
 function BrandIcon({ icon }: { icon: SimpleIcon }) {

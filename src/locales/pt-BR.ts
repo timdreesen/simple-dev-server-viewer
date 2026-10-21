@@ -24,6 +24,8 @@ export const ptBR: Record<keyof typeof en, string> = {
   scanFailed: "Falha na verificação",
   showOtherProcesses: "Mostrar outros processos",
   showHidden: "Mostrar ocultos",
+  showPreviews: "Mostrar prévias",
+  showPreviewsTitle: "Mostra o favicon, o título da página e uma miniatura de cada serviço web",
   dockerNotDetected: "Docker não detectado",
   dockerNotDetectedTitle: "O Docker não está instalado ou não está em execução",
 
@@ -36,6 +38,7 @@ export const ptBR: Record<keyof typeof en, string> = {
   copyAddress: "Copiar {address}",
   copied: "{text} copiado",
   copyFailed: "Não foi possível copiar para a área de transferência",
+  pagePreview: "Prévia de {name}",
   hid: "{name} foi ocultado",
 
   container: "Container",

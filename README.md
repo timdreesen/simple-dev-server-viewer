@@ -9,6 +9,7 @@ AI coding agents are pretty good at starting test servers. They are not always a
 - Finds running dev servers, databases, Docker containers, and Android emulators, grouped in one list.
 - Click a port to open it in your browser (or copy it, for databases).
 - Click a row to see the full command, folder, PID, and resource use.
+- Shows web services with their favicon and page title, plus a live thumbnail when you open a row (can be turned off).
 - Stop a server (process tree or Docker container) with two clicks, open its folder, or hide it.
 - Shows likely dev services by default, with a toggle for other processes listening on ports.
 - Follows your system's light or dark theme. Press `/` or `Ctrl+F` to filter.
@@ -55,6 +56,7 @@ The Rust backend scans listening ports, matches them to running processes, and s
 
 - `src-tauri/src/detect.rs`: service detection rules (pure, unit tested)
 - `src-tauri/src/lib.rs`: port scanner, Docker integration, and process controls
+- `src-tauri/src/preview.rs`: reads page titles and favicons, from local addresses only
 - `src/App.tsx`: app behavior and interface
 - `src/services.ts`: list sections, filtering, and hidden services
 - `src/i18n.ts` and `src/locales/`: translations

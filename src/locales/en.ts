@@ -23,6 +23,8 @@ export const en = {
   scanFailed: "Scan failed",
   showOtherProcesses: "Show other processes",
   showHidden: "Show hidden",
+  showPreviews: "Show previews",
+  showPreviewsTitle: "Show each web service's favicon, page title, and a thumbnail",
   dockerNotDetected: "Docker not detected",
   dockerNotDetectedTitle: "Docker is not installed or not running",
 
@@ -35,6 +37,7 @@ export const en = {
   copyAddress: "Copy {address}",
   copied: "Copied {text}",
   copyFailed: "Could not copy to clipboard",
+  pagePreview: "Preview of {name}",
   hid: "Hid {name}",
 
   container: "Container",

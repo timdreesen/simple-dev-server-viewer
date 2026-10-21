@@ -34,6 +34,12 @@ export interface Service {
   hideKey: string;
 }
 
+/** Title and icon read from a web service's page; both empty when it isn't HTML. */
+export interface PageInfo {
+  title?: string;
+  favicon?: string;
+}
+
 export interface ScanResult {
   services: Service[];
   scannedAt: number;
@@ -115,6 +121,11 @@ export function groupServices(services: Service[]): Group[] {
   return groupKeys
     .map((key) => ({ title: t(key), services: services.filter((service) => groupKey(service) === key) }))
     .filter((group) => group.services.length > 0);
+}
+
+/** The page a web service serves, used for its title, favicon, and thumbnail. */
+export function previewUrl(service: Service): string | undefined {
+  return service.ports.find((port) => port.url)?.url;
 }
 
 /** What the port chip shows and what gets copied for non-browsable ports. */
