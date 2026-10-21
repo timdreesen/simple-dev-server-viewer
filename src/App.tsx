@@ -32,12 +32,15 @@ import {
   serializeHiddenKeys,
   serviceDetail,
   serviceName,
+  typeOptions,
   type Category,
   type PageInfo,
   type PortInfo,
   type ScanResult,
   type Service,
+  type TypeOption,
 } from "./services";
+import { TypeFilter } from "./TypeFilter";
 
 interface ActionResult {
   success: boolean;
@@ -79,6 +82,7 @@ function App() {
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const [types, setTypes] = useState<Set<string>>(new Set());
   const [hiddenKeys, setHiddenKeys] = useState(() =>
     parseHiddenKeys(localStorage.getItem(HIDDEN_STORAGE_KEY) ?? localStorage.getItem(LEGACY_HIDDEN_STORAGE_KEY)),
   );
@@ -123,7 +127,7 @@ function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      const typing = document.activeElement === searchRef.current;
+      const typing = document.activeElement instanceof HTMLInputElement;
       if ((event.key === "f" && (event.ctrlKey || event.metaKey)) || (event.key === "/" && !typing)) {
         event.preventDefault();
         searchRef.current?.focus();
@@ -154,9 +158,16 @@ function App() {
   }, [scan]);
 
   const sections = useMemo(
-    () => sectionServices(scan?.services ?? [], hiddenKeys, query),
-    [scan, hiddenKeys, query],
+    () => sectionServices(scan?.services ?? [], hiddenKeys, query, types),
+    [scan, hiddenKeys, query, types],
   );
+
+  // Offer the types of everything that can currently be listed, regardless of the other filters.
+  const typeChoices = useMemo(() => {
+    const all = sectionServices(scan?.services ?? [], hiddenKeys, "");
+    const listed = [...all.servers, ...(showOthers ? all.others : []), ...(showHidden ? all.hidden : [])];
+    return typeOptions(listed, types);
+  }, [scan, hiddenKeys, showOthers, showHidden, types]);
 
   // Read the title and favicon of web services as they appear in the list.
   useEffect(() => {
@@ -270,7 +281,16 @@ function App() {
         <h1>
           {t("running")} {scan && <span className="count">{sections.servers.length}</span>}
         </h1>
-        <label className="search">
+        <div className="topbar-filters">
+          <TypeFilter
+            options={typeChoices}
+            selected={types}
+            onChange={setTypes}
+            renderIcon={(option: TypeOption) => (
+              <TypeIcon framework={option.type} category={option.category} size={14} />
+            )}
+          />
+          <label className="search">
           <Search size={14} aria-hidden />
           <input
             ref={searchRef}
@@ -285,7 +305,8 @@ function App() {
               <X size={13} />
             </button>
           )}
-        </label>
+          </label>
+        </div>
       </header>
 
       <main className="content">
@@ -297,8 +318,11 @@ function App() {
           <>
             {sections.servers.length > 0 ? (
               renderGroups(sections.servers)
-            ) : query ? (
-              <EmptyState title={t("noMatches")} detail={t("noMatchesDetail", { query })} />
+            ) : query || types.size > 0 ? (
+              <EmptyState
+                title={t("noMatches")}
+                detail={query ? t("noMatchesDetail", { query }) : t("noMatchesTypes")}
+              />
             ) : (
               <EmptyState title={t("nothingRunning")} detail={<NothingRunningDetail />} />
             )}
@@ -612,11 +636,15 @@ function Thumbnail({ url, name, actions }: { url: string; name: string; actions:
   );
 }
 
+function TypeIcon({ framework, category, size = 16 }: { framework: string; category: Category; size?: number }) {
+  const brand = frameworkIcon(framework);
+  const Fallback = categoryIcons[category] ?? Server;
+  return brand ? <BrandIcon icon={brand} size={size} /> : <Fallback size={size} />;
+}
+
 function ServiceIcon({ service, favicon }: { service: Service; favicon?: string }) {
   const [failedFavicon, setFailedFavicon] = useState<string>();
-  const brand = frameworkIcon(service.framework);
-  const Fallback = categoryIcons[service.category] ?? Server;
-  const fallback = brand ? <BrandIcon icon={brand} /> : <Fallback size={16} />;
+  const fallback = <TypeIcon framework={service.framework} category={service.category} />;
   return (
     <div className="service-icon">
       {favicon && favicon !== failedFavicon ? (
@@ -628,9 +656,9 @@ function ServiceIcon({ service, favicon }: { service: Service; favicon?: string 
   );
 }
 
-function BrandIcon({ icon }: { icon: SimpleIcon }) {
+function BrandIcon({ icon, size = 16 }: { icon: SimpleIcon; size?: number }) {
   return (
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-label={icon.title} role="img">
+    <svg viewBox="0 0 24 24" width={size} height={size} aria-label={icon.title} role="img">
       <path fill="currentColor" d={icon.path} />
     </svg>
   );

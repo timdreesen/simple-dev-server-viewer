@@ -8,6 +8,7 @@ import {
   serializeHiddenKeys,
   serviceDetail,
   serviceName,
+  typeOptions,
   type Service,
 } from "./services";
 
@@ -123,5 +124,29 @@ describe("serviceName", () => {
     expect(serviceName(service({ displayName: "Local server" }))).toBe("Servidor local");
     expect(serviceDetail(service({ framework: "Database" }))).toBe("Banco de dados");
     expect(serviceName(service({ displayName: "my-app" }))).toBe("my-app");
+  });
+});
+
+describe("types", () => {
+  const services = [
+    service({ id: "a", framework: "Vite" }),
+    service({ id: "b", framework: "Docker", category: "container" }),
+    service({ id: "c", framework: "Vite" }),
+    service({ id: "d", framework: "Other", isLikelyDev: false }),
+  ];
+
+  it("lists types by count, keeping selected types that are gone", () => {
+    expect(typeOptions(services, new Set(["Redis"])).map((option) => [option.label, option.count])).toEqual([
+      ["Vite", 2],
+      ["Docker", 1],
+      ["Other", 1],
+      ["Redis", 0],
+    ]);
+  });
+
+  it("filters sections by type", () => {
+    const sections = sectionServices(services, new Set(), "", new Set(["Vite", "Other"]));
+    expect(sections.servers.map((item) => item.id)).toEqual(["a", "c"]);
+    expect(sections.others.map((item) => item.id)).toEqual(["d"]);
   });
 });

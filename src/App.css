@@ -50,6 +50,34 @@ code { font-family: var(--mono); font-size: 12px; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
 .topbar h1 { margin: 0; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .count { min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); font-size: 12px; font-weight: 500; text-align: center; }
+.topbar-filters { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; min-width: 0; }
+
+.type-filter { position: relative; }
+.type-control { display: flex; align-items: center; gap: 4px; min-width: 150px; max-width: 340px; min-height: 30px; padding: 2px 4px 2px 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); }
+.type-control:focus-within, .type-control.open { border-color: var(--accent); }
+.type-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 130px; height: 22px; padding: 0 2px 0 8px; border-radius: 11px; background: var(--accent-soft); color: var(--accent); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.type-chip.more { padding: 0 8px; }
+.type-chip button { display: grid; flex: none; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; }
+.type-chip button:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.type-toggle { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 6px; min-width: 22px; height: 24px; padding: 0 4px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 13px; }
+.type-toggle:focus-visible { outline-offset: -1px; }
+.type-placeholder { color: var(--faint); white-space: nowrap; }
+.type-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 10; width: 270px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); box-shadow: 0 12px 32px rgb(0 0 0 / .22); }
+.type-search { width: 100%; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; outline: 0; background: var(--surface); font-size: 13px; }
+.type-search:focus { border-color: var(--accent); }
+.type-search::placeholder { color: var(--faint); }
+.type-options { max-height: 280px; margin: 6px 0 0; padding: 0; overflow-y: auto; list-style: none; }
+.type-option { display: grid; grid-template-columns: 14px 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.type-option.active { background: var(--hover); }
+.type-check { display: grid; place-items: center; color: var(--accent); }
+.type-icon { display: grid; place-items: center; color: var(--muted); }
+.type-option[aria-selected="true"] .type-label { color: var(--accent); font-weight: 550; }
+.type-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.type-count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.type-empty { padding: 10px 8px; color: var(--muted); font-size: 12px; }
+.type-clear { width: 100%; margin-top: 6px; padding: 8px 6px 4px; border: 0; border-top: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 12px; }
+.type-clear:hover { color: var(--text); }
+
 .search { display: flex; align-items: center; gap: 6px; width: 220px; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; color: var(--faint); background: var(--bg); }
 .search:focus-within { border-color: var(--accent); }
 .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; }

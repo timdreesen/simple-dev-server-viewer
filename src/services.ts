@@ -92,10 +92,16 @@ export function matchesQuery(service: Service, query: string): boolean {
     .includes(search);
 }
 
-export function sectionServices(services: Service[], hiddenKeys: Set<string>, query: string): Sections {
+export function sectionServices(
+  services: Service[],
+  hiddenKeys: Set<string>,
+  query: string,
+  types: Set<string> = new Set(),
+): Sections {
   const sections: Sections = { servers: [], others: [], hidden: [] };
   for (const service of services) {
     if (!matchesQuery(service, query)) continue;
+    if (types.size > 0 && !types.has(serviceType(service))) continue;
     if (hiddenKeys.has(service.hideKey)) sections.hidden.push(service);
     else if (service.isLikelyDev) sections.servers.push(service);
     else sections.others.push(service);
@@ -121,6 +127,36 @@ export function groupServices(services: Service[]): Group[] {
   return groupKeys
     .map((key) => ({ title: t(key), services: services.filter((service) => groupKey(service) === key) }))
     .filter((group) => group.services.length > 0);
+}
+
+/** What the scanner recognized a service as (Vite, PostgreSQL, Docker, ...), used by the type filter. */
+export const serviceType = (service: Service) => service.framework;
+
+export function typeLabel(type: string): string {
+  return type === "Other" ? t("otherType") : frameworkLabel(type);
+}
+
+export interface TypeOption {
+  type: string;
+  label: string;
+  /** Category of the first service of this type, for its icon. */
+  category: Category;
+  count: number;
+}
+
+/** The types among the given services, most common first. Selected types stay listed even when nothing matches. */
+export function typeOptions(services: Service[], selected: Set<string>): TypeOption[] {
+  const options = new Map<string, TypeOption>();
+  for (const service of services) {
+    const type = serviceType(service);
+    const option = options.get(type) ?? { type, label: typeLabel(type), category: service.category, count: 0 };
+    option.count += 1;
+    options.set(type, option);
+  }
+  for (const type of selected) {
+    if (!options.has(type)) options.set(type, { type, label: typeLabel(type), category: "unknown", count: 0 });
+  }
+  return [...options.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
 /** The page a web service serves, used for its title, favicon, and thumbnail. */
