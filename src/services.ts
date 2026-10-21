@@ -1,3 +1,5 @@
+import { t, type MessageKey } from "./i18n";
+
 export type Category = "web" | "database" | "container" | "runtime" | "emulator" | "unknown";
 
 export interface PortInfo {
@@ -70,6 +72,7 @@ export function matchesQuery(service: Service, query: string): boolean {
   if (!search) return true;
   return [
     service.displayName,
+    serviceName(service),
     service.name,
     service.framework,
     service.command,
@@ -99,18 +102,18 @@ export interface Group {
   services: Service[];
 }
 
-const groupTitles = ["Servers", "Databases", "Emulators"] as const;
+const groupKeys = ["servers", "databases", "emulators"] as const;
 
-function groupTitle(service: Service): (typeof groupTitles)[number] {
-  if (service.category === "database") return "Databases";
-  if (service.category === "emulator") return "Emulators";
-  return "Servers";
+function groupKey(service: Service): (typeof groupKeys)[number] {
+  if (service.category === "database") return "databases";
+  if (service.category === "emulator") return "emulators";
+  return "servers";
 }
 
 /** Splits the main list by kind, keeping the scan order inside each group. */
 export function groupServices(services: Service[]): Group[] {
-  return groupTitles
-    .map((title) => ({ title, services: services.filter((service) => groupTitle(service) === title) }))
+  return groupKeys
+    .map((key) => ({ title: t(key), services: services.filter((service) => groupKey(service) === key) }))
     .filter((group) => group.services.length > 0);
 }
 
@@ -119,8 +122,23 @@ export function portAddress(port: PortInfo): string {
   return `${port.address}:${port.port}`;
 }
 
+/** Generic labels the scanner uses when it can't tell what a service is. */
+const genericLabels: Record<string, MessageKey> = { "Local server": "localServer", Database: "database" };
+
+export function frameworkLabel(framework: string): string {
+  const key = genericLabels[framework];
+  return key ? t(key) : framework;
+}
+
+/** The display name in the user's language; services the scanner can't inspect are named after their port. */
+export function serviceName(service: Service): string {
+  if (service.id.startsWith("port:") && service.ports.length > 0) return t("port", { port: service.ports[0].port });
+  return frameworkLabel(service.displayName);
+}
+
 export function serviceDetail(service: Service): string {
-  if (service.docker) return service.framework === "Docker" ? service.docker.image : `${service.framework} · Docker`;
-  if (service.pid === undefined) return "Owned by another user";
-  return service.framework === "Other" ? service.name : service.framework;
+  const framework = frameworkLabel(service.framework);
+  if (service.docker) return service.framework === "Docker" ? service.docker.image : `${framework} · Docker`;
+  if (service.pid === undefined) return t("ownedByAnotherUser");
+  return service.framework === "Other" ? service.name : framework;
 }

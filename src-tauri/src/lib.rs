@@ -78,6 +78,12 @@ struct ScanResult {
 struct ActionResult {
     success: bool,
     message: String,
+    /// Identifies a known outcome so the interface can show it in the user's
+    /// language. `message` is the English fallback, e.g. for system errors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    count: Option<usize>,
 }
 
 impl ActionResult {
@@ -85,6 +91,8 @@ impl ActionResult {
         Self {
             success: true,
             message: message.into(),
+            code: None,
+            count: None,
         }
     }
 
@@ -92,7 +100,19 @@ impl ActionResult {
         Self {
             success: false,
             message: message.into(),
+            code: None,
+            count: None,
         }
+    }
+
+    fn code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    fn count(mut self, count: usize) -> Self {
+        self.count = Some(count);
+        self
     }
 }
 
@@ -407,7 +427,7 @@ fn plural(count: usize, word: &str) -> String {
 #[tauri::command(async)]
 fn stop_process_tree(pid: u32, state: State<AppState>) -> ActionResult {
     let Ok(mut system) = state.system.lock() else {
-        return ActionResult::fail("Process scanner unavailable");
+        return ActionResult::fail("Process scanner unavailable").code("scannerUnavailable");
     };
     system.refresh_processes(ProcessesToUpdate::All, true);
     let root = Pid::from_u32(pid);
@@ -425,21 +445,26 @@ fn stop_process_tree(pid: u32, state: State<AppState>) -> ActionResult {
         .count();
     if stopped > 0 {
         ActionResult::ok(format!("Stopped {}", plural(stopped, "process")))
+            .code("processesStopped")
+            .count(stopped)
     } else {
         ActionResult::fail("The process is no longer running or could not be stopped")
+            .code("stopFailed")
     }
 }
 
 #[tauri::command(async)]
 fn stop_container(container_id: String) -> ActionResult {
     if container_id.is_empty() || !container_id.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return ActionResult::fail("Invalid container ID");
+        return ActionResult::fail("Invalid container ID").code("invalidContainerId");
     }
     match quiet_command("docker")
         .args(["stop", &container_id])
         .output()
     {
-        Ok(output) if output.status.success() => ActionResult::ok("Container stopped"),
+        Ok(output) if output.status.success() => {
+            ActionResult::ok("Container stopped").code("containerStopped")
+        }
         Ok(output) => {
             ActionResult::fail(String::from_utf8_lossy(&output.stderr).trim().to_string())
         }
@@ -456,7 +481,7 @@ fn reveal_process_directory(pid: u32, state: State<AppState>) -> ActionResult {
             .map(Path::to_path_buf)
     });
     let Some(path) = path else {
-        return ActionResult::fail("Working directory is unavailable");
+        return ActionResult::fail("Working directory is unavailable").code("folderUnavailable");
     };
     match tauri_plugin_opener::open_path(&path, None::<&str>) {
         Ok(()) => ActionResult::ok(format!("Opened {}", path.display())),
@@ -467,7 +492,7 @@ fn reveal_process_directory(pid: u32, state: State<AppState>) -> ActionResult {
 #[tauri::command(async)]
 fn open_service(url: String) -> ActionResult {
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return ActionResult::fail("Only HTTP and HTTPS URLs can be opened");
+        return ActionResult::fail("Only HTTP and HTTPS URLs can be opened").code("unsupportedUrl");
     }
     match tauri_plugin_opener::open_url(&url, None::<&str>) {
         Ok(()) => ActionResult::ok(format!("Opened {url}")),

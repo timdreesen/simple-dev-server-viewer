@@ -12,6 +12,7 @@ AI coding agents are pretty good at starting test servers. They are not always a
 - Stop a server (process tree or Docker container) with two clicks, open its folder, or hide it.
 - Shows likely dev services by default, with a toggle for other processes listening on ports.
 - Follows your system's light or dark theme. Press `/` or `Ctrl+F` to filter.
+- Speaks your system's language: English and Brazilian Portuguese so far.
 - Runs on Windows 10/11, macOS, and Linux.
 - Has no accounts, telemetry, cloud services, or background process.
 
@@ -56,7 +57,12 @@ The Rust backend scans listening ports, matches them to running processes, and s
 - `src-tauri/src/lib.rs`: port scanner, Docker integration, and process controls
 - `src/App.tsx`: app behavior and interface
 - `src/services.ts`: list sections, filtering, and hidden services
+- `src/i18n.ts` and `src/locales/`: translations
 - `src/App.css`: styling
+
+## Translations
+
+The app picks the first supported language from your system settings and falls back to English. To add a language, copy `src/locales/pt-BR.ts`, translate every string (keep the `{placeholders}`), and register it in `src/i18n.ts`. TypeScript reports any missing string.
 
 ## Downloads
 

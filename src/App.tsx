@@ -4,6 +4,7 @@ import type { SimpleIcon } from "simple-icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import "./App.css";
 import { formatBytes, formatUptime } from "./format";
+import { t, type MessageKey } from "./i18n";
 import { frameworkIcon } from "./icons";
 import {
   groupServices,
@@ -14,6 +15,7 @@ import {
   sectionServices,
   serializeHiddenKeys,
   serviceDetail,
+  serviceName,
   type Category,
   type PortInfo,
   type ScanResult,
@@ -23,6 +25,14 @@ import {
 interface ActionResult {
   success: boolean;
   message: string;
+  /** Known outcome, shown in the user's language; without it the raw (system) message is shown. */
+  code?: Exclude<MessageKey, "processStopped">;
+  count?: number;
+}
+
+function actionMessage({ message, code, count = 0 }: ActionResult): string {
+  if (code === "processesStopped") return t(count === 1 ? "processStopped" : "processesStopped", { count });
+  return code ? t(code) : message;
 }
 
 interface Actions {
@@ -134,7 +144,7 @@ function App() {
     const run = async (command: string, args: Record<string, unknown>, announce = false) => {
       try {
         const result = await invoke<ActionResult>(command, args);
-        if (!result.success || announce) notify(result.message);
+        if (!result.success || announce) notify(actionMessage(result));
         return result.success;
       } catch (reason) {
         notify(String(reason));
@@ -145,8 +155,8 @@ function App() {
       open: (url) => void run("open_service", { url }),
       copy: (text) =>
         navigator.clipboard.writeText(text).then(
-          () => notify(`Copied ${text}`),
-          () => notify("Could not copy to clipboard"),
+          () => notify(t("copied", { text })),
+          () => notify(t("copyFailed")),
         ),
       reveal: (service) => service.pid !== undefined && void run("reveal_process_directory", { pid: service.pid }),
       stop: async (service) => {
@@ -169,7 +179,7 @@ function App() {
           if (next.has(service.hideKey)) next.delete(service.hideKey);
           else {
             next.add(service.hideKey);
-            notify(`Hid ${service.displayName}`);
+            notify(t("hid", { name: serviceName(service) }));
           }
           return next;
         });
@@ -207,7 +217,7 @@ function App() {
     <div className="app">
       <header className="topbar">
         <h1>
-          Running {scan && <span className="count">{sections.servers.length}</span>}
+          {t("running")} {scan && <span className="count">{sections.servers.length}</span>}
         </h1>
         <label className="search">
           <Search size={14} aria-hidden />
@@ -215,12 +225,12 @@ function App() {
             ref={searchRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter"
-            aria-label="Filter by name, port, or command"
+            placeholder={t("filter")}
+            aria-label={t("filterLabel")}
             spellCheck={false}
           />
           {query && (
-            <button onClick={() => setQuery("")} aria-label="Clear filter">
+            <button onClick={() => setQuery("")} aria-label={t("clearFilter")}>
               <X size={13} />
             </button>
           )}
@@ -229,52 +239,45 @@ function App() {
 
       <main className="content">
         {error && !scan ? (
-          <EmptyState title="Can't read open ports" detail={error} />
+          <EmptyState title={t("cantReadPorts")} detail={error} />
         ) : !scan ? (
-          <EmptyState title="Looking for servers…" />
+          <EmptyState title={t("lookingForServers")} />
         ) : (
           <>
             {sections.servers.length > 0 ? (
               renderGroups(sections.servers)
             ) : query ? (
-              <EmptyState title="No matches" detail={`Nothing running matches “${query}”.`} />
+              <EmptyState title={t("noMatches")} detail={t("noMatchesDetail", { query })} />
             ) : (
-              <EmptyState
-                title="Nothing running"
-                detail={
-                  <>
-                    Start one, for example <code>npm run dev</code>, and it shows up here automatically.
-                  </>
-                }
-              />
+              <EmptyState title={t("nothingRunning")} detail={<NothingRunningDetail />} />
             )}
             {showOthers && sections.others.length > 0 && (
-              <Section title="Other processes listening on ports">{renderList(sections.others)}</Section>
+              <Section title={t("otherProcesses")}>{renderList(sections.others)}</Section>
             )}
             {showHidden && sections.hidden.length > 0 && (
-              <Section title="Hidden">{renderList(sections.hidden, true)}</Section>
+              <Section title={t("hidden")}>{renderList(sections.hidden, true)}</Section>
             )}
           </>
         )}
       </main>
 
       <footer className="statusbar">
-        <span className={`live ${error ? "offline" : ""}`} title={error || "Scanning every 2 seconds"}>
-          <i aria-hidden /> {error ? "Scan failed" : "Live"}
+        <span className={`live ${error ? "offline" : ""}`} title={error || t("liveTitle")}>
+          <i aria-hidden /> {error ? t("scanFailed") : t("live")}
         </span>
         <label className="checkbox">
           <input type="checkbox" checked={showOthers} onChange={(event) => setShowOthers(event.target.checked)} />
-          Show other processes{scan ? ` (${sections.others.length})` : ""}
+          {t("showOtherProcesses")}{scan ? ` (${sections.others.length})` : ""}
         </label>
         {sections.hidden.length > 0 && (
           <label className="checkbox">
             <input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} />
-            Show hidden ({sections.hidden.length})
+            {t("showHidden")} ({sections.hidden.length})
           </label>
         )}
         {scan && !scan.dockerAvailable && (
-          <span className="muted push" title="Docker is not installed or not running">
-            Docker not detected
+          <span className="muted push" title={t("dockerNotDetectedTitle")}>
+            {t("dockerNotDetected")}
           </span>
         )}
       </footer>
@@ -336,8 +339,8 @@ function ServiceRow({
       >
         <ServiceIcon service={service} />
         <div className="service-title">
-          <span className="service-name">{service.displayName}</span>
-          <span className="service-meta">{stopping ? "Stopping…" : meta.join(" · ")}</span>
+          <span className="service-name">{serviceName(service)}</span>
+          <span className="service-meta">{stopping ? t("stopping") : meta.join(" · ")}</span>
         </div>
         <div className="ports">
           {service.ports.slice(0, MAX_VISIBLE_PORTS).map((port) => (
@@ -347,11 +350,11 @@ function ServiceRow({
         </div>
         <div className="row-actions" onClick={(event) => event.stopPropagation()}>
           {service.canReveal && (
-            <IconButton label="Open folder" onClick={() => actions.reveal(service)}>
+            <IconButton label={t("openFolder")} onClick={() => actions.reveal(service)}>
               <FolderOpen size={15} />
             </IconButton>
           )}
-          <IconButton label={hidden ? "Unhide" : "Hide from list"} onClick={() => actions.toggleHidden(service)}>
+          <IconButton label={hidden ? t("unhide") : t("hide")} onClick={() => actions.toggleHidden(service)}>
             {hidden ? <Eye size={15} /> : <EyeOff size={15} />}
           </IconButton>
           {service.canStop && <StopButton disabled={stopping} onConfirm={() => actions.stop(service)} />}
@@ -367,7 +370,7 @@ function PortChip({ port, actions }: { port: PortInfo; actions: Actions }) {
   return (
     <button
       className={`port ${port.url ? "link" : ""}`}
-      title={port.url ? `Open ${port.url}` : `Copy ${address}`}
+      title={port.url ? t("openUrl", { url: port.url }) : t("copyAddress", { address })}
       onClick={(event) => {
         event.stopPropagation();
         if (port.url) actions.open(port.url);
@@ -399,12 +402,12 @@ function StopButton({ disabled, onConfirm }: { disabled: boolean; onConfirm: () 
           onConfirm();
         }}
       >
-        Stop
+        {t("stop")}
       </button>
     );
   }
   return (
-    <IconButton label="Stop" danger disabled={disabled} onClick={() => setArmed(true)}>
+    <IconButton label={t("stop")} danger disabled={disabled} onClick={() => setArmed(true)}>
       <Square size={11} fill="currentColor" />
     </IconButton>
   );
@@ -439,12 +442,12 @@ function IconButton({
 function ServiceDetails({ service, actions }: { service: Service; actions: Actions }) {
   const rows: [string, ReactNode][] = [];
   if (service.docker) {
-    rows.push(["Container", service.docker.name], ["Image", service.docker.image]);
+    rows.push([t("container"), service.docker.name], [t("image"), service.docker.image]);
   }
-  if (service.command) rows.push(["Command", <code key="command">{service.command}</code>]);
-  if (service.workingDirectory) rows.push(["Folder", <code key="folder">{service.workingDirectory}</code>]);
+  if (service.command) rows.push([t("command"), <code key="command">{service.command}</code>]);
+  if (service.workingDirectory) rows.push([t("folder"), <code key="folder">{service.workingDirectory}</code>]);
   rows.push([
-    "Ports",
+    t("ports"),
     <span key="ports" className="detail-ports">
       {service.ports.map((port) => (
         <button key={port.port} className="text-button" onClick={() => actions.copy(port.url ?? portAddress(port))}>
@@ -455,11 +458,11 @@ function ServiceDetails({ service, actions }: { service: Service; actions: Actio
   ]);
   if (service.pid !== undefined) {
     rows.push(
-      ["Process", `${service.name} (PID ${service.pid})`],
-      ["Resources", `${service.cpuPercent.toFixed(1)}% CPU · ${formatBytes(service.memoryBytes)}`],
+      [t("process"), t("processWithPid", { name: service.name, pid: service.pid })],
+      [t("resources"), `${service.cpuPercent.toFixed(1)}% CPU · ${formatBytes(service.memoryBytes)}`],
     );
   } else if (!service.docker) {
-    rows.push(["Process", "Owned by another user or the system. Run the app with elevated rights to see more."]);
+    rows.push([t("process"), t("restrictedProcess")]);
   }
 
   return (
@@ -485,6 +488,17 @@ function BrandIcon({ icon }: { icon: SimpleIcon }) {
     <svg viewBox="0 0 24 24" width="16" height="16" aria-label={icon.title} role="img">
       <path fill="currentColor" d={icon.path} />
     </svg>
+  );
+}
+
+function NothingRunningDetail() {
+  const [before, after] = t("nothingRunningDetail").split("{command}");
+  return (
+    <>
+      {before}
+      <code>npm run dev</code>
+      {after}
+    </>
   );
 }
 

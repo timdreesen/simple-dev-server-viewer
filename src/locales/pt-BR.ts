@@ -1,0 +1,65 @@
+import type { en } from "./en";
+
+export const ptBR: Record<keyof typeof en, string> = {
+  running: "Em execução",
+  filter: "Filtrar",
+  filterLabel: "Filtrar por nome, porta ou comando",
+  clearFilter: "Limpar filtro",
+
+  cantReadPorts: "Não foi possível ler as portas abertas",
+  lookingForServers: "Procurando servidores…",
+  noMatches: "Nenhum resultado",
+  noMatchesDetail: "Nada em execução corresponde a “{query}”.",
+  nothingRunning: "Nada em execução",
+  nothingRunningDetail: "Inicie um, por exemplo {command}, e ele aparecerá aqui automaticamente.",
+
+  servers: "Servidores",
+  databases: "Bancos de dados",
+  emulators: "Emuladores",
+  otherProcesses: "Outros processos usando portas",
+  hidden: "Ocultos",
+
+  live: "Ao vivo",
+  liveTitle: "Verificando a cada 2 segundos",
+  scanFailed: "Falha na verificação",
+  showOtherProcesses: "Mostrar outros processos",
+  showHidden: "Mostrar ocultos",
+  dockerNotDetected: "Docker não detectado",
+  dockerNotDetectedTitle: "O Docker não está instalado ou não está em execução",
+
+  stopping: "Encerrando…",
+  openFolder: "Abrir pasta",
+  hide: "Ocultar da lista",
+  unhide: "Mostrar",
+  stop: "Encerrar",
+  openUrl: "Abrir {url}",
+  copyAddress: "Copiar {address}",
+  copied: "{text} copiado",
+  copyFailed: "Não foi possível copiar para a área de transferência",
+  hid: "{name} foi ocultado",
+
+  container: "Container",
+  image: "Imagem",
+  command: "Comando",
+  folder: "Pasta",
+  ports: "Portas",
+  process: "Processo",
+  resources: "Recursos",
+  processWithPid: "{name} (PID {pid})",
+  restrictedProcess:
+    "Pertence a outro usuário ou ao sistema. Execute o app com privilégios de administrador para ver mais.",
+  ownedByAnotherUser: "Pertence a outro usuário",
+
+  localServer: "Servidor local",
+  database: "Banco de dados",
+  port: "Porta {port}",
+
+  processStopped: "{count} processo encerrado",
+  processesStopped: "{count} processos encerrados",
+  stopFailed: "O processo não está mais em execução ou não pôde ser encerrado",
+  scannerUnavailable: "Verificador de processos indisponível",
+  containerStopped: "Container encerrado",
+  invalidContainerId: "ID de container inválido",
+  folderUnavailable: "A pasta de trabalho não está disponível",
+  unsupportedUrl: "Só é possível abrir URLs HTTP e HTTPS",
+};
